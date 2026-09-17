@@ -25,6 +25,7 @@ import type {
 } from "./app-server/protocol.js";
 import type { CodexControlRequestObservation } from "./app-server/request-observation.js";
 import { withTimeout } from "./app-server/timeout.js";
+import { CodexCatalogLoadingError } from "./session-catalog-availability.js";
 import {
   startCodexCatalogPageDiagnostics,
   startCodexCatalogControlRequestDiagnostics,
@@ -216,7 +217,15 @@ function createCodexSessionCatalogControlFromRequests(params: {
     async listPage(pageParams) {
       readControlCursor(pageParams.cursor, "request");
       const query = readPageParams(pageParams);
-      return await (await params.createRequestSnapshot().index()).list(query);
+      const requests = params.createRequestSnapshot();
+      const deadline = performance.now() + requests.requestTimeoutMs;
+      const index = await withTimeout(
+        requests.index(),
+        requests.requestTimeoutMs,
+        "Codex session catalog is still loading",
+        () => new CodexCatalogLoadingError(),
+      );
+      return await index.list(query, deadline);
     },
     async listDescendantPage(listParams) {
       const requests = params.createRequestSnapshot();

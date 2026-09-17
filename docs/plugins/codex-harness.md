@@ -49,7 +49,8 @@ process home waits for an authorized catalog request. A home without a valid,
 complete saved snapshot walks native `thread/list` pages once, yielding between
 pages. Its first list waits for a usable native page or confirmed empty inventory,
 within the existing app-server request timeout. That single request budget also
-covers loading saved state. Partial results carry an opaque continuation cursor;
+covers loading saved state and draining earlier cache writes after a configuration
+reload. A timed-out caller leaves the shared write drain running. Partial results carry an opaque continuation cursor;
 a continuation that catches up with discovery waits for the next page within its
 request budget. If discovery is still pending at the deadline, the host reports a
 loading error and asks the caller to retry. The shared hydration continues in the

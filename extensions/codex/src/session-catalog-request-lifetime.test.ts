@@ -426,7 +426,7 @@ describe("resident catalog hydration request lifetime", () => {
     }
   });
 
-  it("waits only for admitted same-home state writes before replacing a catalog", async () => {
+  it.each([false, true])("bounds same-home retirement waits (expired: %s)", async (expired) => {
     const writeStarted = createDeferred<void>();
     const writeAllowed = createDeferred<void>();
     const values = new Map<string, StoredCodexCatalogEntry>();
@@ -458,17 +458,29 @@ describe("resident catalog hydration request lifetime", () => {
         delivered(result);
         return result;
       });
-      void listed.catch(() => undefined);
+      const rejected = vi.fn();
+      void listed.catch(rejected);
       await nextTurn();
       expect(delivered).not.toHaveBeenCalled();
       expect(state.entries).toHaveBeenCalledOnce();
+      if (expired) {
+        await vi.advanceTimersByTimeAsync(REQUEST_TIMEOUT_MS + 1);
+        expect(rejected).toHaveBeenCalledWith(
+          expect.objectContaining({ code: "APP_SERVER_UNAVAILABLE" }),
+        );
+        expect(state.entries).toHaveBeenCalledOnce();
+      }
       writeAllowed.resolve();
       await nextTurn();
       expect(delivered).not.toHaveBeenCalled();
       const current = observeHydration(control.initialize());
       h.reply(await h.frame(2), "current-thread");
       await current;
-      expect((await listed).sessions).toMatchObject([{ threadId: "current-thread" }]);
+      if (expired) {
+        expect(delivered).not.toHaveBeenCalled();
+      } else {
+        expect((await listed).sessions).toMatchObject([{ threadId: "current-thread" }]);
+      }
       const beforeRetiredReply = await state.entries();
       expect(
         beforeRetiredReply.flatMap(({ value }) =>
@@ -477,7 +489,9 @@ describe("resident catalog hydration request lifetime", () => {
       ).toEqual(["current-thread"]);
       h.reply(retired, "stale-thread");
       retiredReplied = true;
-      await expect(first).rejects.toThrow(/closed|configuration changed/);
+      await expect(first).rejects.toThrow(
+        expired ? /thread\/list timed out/ : /closed|configuration changed/,
+      );
       expect(await state.entries()).toEqual(beforeRetiredReply);
       expect((await control.listPage({})).sessions).toMatchObject([{ threadId: "current-thread" }]);
     } finally {

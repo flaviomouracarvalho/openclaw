@@ -681,9 +681,11 @@ export class CodexCatalogIndex {
     return this.rows.get(threadId);
   }
 
-  async list(params: CodexSessionCatalogPageParams): Promise<CodexSessionCatalogPage> {
+  async list(
+    params: CodexSessionCatalogPageParams,
+    deadline = performance.now() + (this.options.requestTimeoutMs ?? 60_000),
+  ): Promise<CodexSessionCatalogPage> {
     const query = prepareCodexCatalogQuery(this.options.homeId, params);
-    const deadline = performance.now() + (this.options.requestTimeoutMs ?? 60_000);
     await this.availability.until(this.restore(), deadline);
     this.assertCurrent();
     this.scheduleHydration();
