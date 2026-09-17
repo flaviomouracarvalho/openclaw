@@ -1293,6 +1293,12 @@ export class MatrixClient {
     };
   }
 
+  async refreshOwnDeviceKeys(): Promise<void> {
+    // Rust initialization restores local state without refreshing device signatures.
+    // Query before the one-off status read so a fresh lease sees current owner trust.
+    await this.client.getCrypto()?.userHasCrossSigningKeys(await this.getUserId(), true);
+  }
+
   async getOwnDeviceVerificationStatus(): Promise<MatrixOwnDeviceVerificationStatus> {
     const recoveryKey = this.recoveryKeyStore.getRecoveryKeySummary();
     const userId = this.client.getUserId() ?? this.selfUserId ?? null;
