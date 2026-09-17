@@ -15,7 +15,10 @@ import { CODEX_APP_SERVER_OVERLOADED_ERROR_CODE, CodexAppServerRpcError } from "
 export function dispatchCodexAppServerResponse(
   response: RpcResponse,
   attempts: Map<number | string, CodexRequestAttempt>,
-  catalogResponses: WeakMap<CodexRequestAttempt, true | CodexCatalogPreviewCache>,
+  catalogResponses: WeakMap<
+    CodexRequestAttempt,
+    { preview?: CodexCatalogPreviewCache; remainingRows?: number }
+  >,
   source: CodexCatalogSource,
 ): boolean {
   const pending = attempts.get(response.id);
@@ -38,12 +41,13 @@ export function dispatchCodexAppServerResponse(
     isJsonObject(response.result) &&
     Array.isArray(response.result.data)
   ) {
-    const preview = catalogResponses.get(pending);
+    const projection = catalogResponses.get(pending);
     try {
       response.result = projectCodexCatalogNativeResponse(
         response.result,
         sanitizeTerminalText,
-        typeof preview === "function" ? preview : undefined,
+        projection?.preview,
+        projection?.remainingRows,
       );
     } catch (error) {
       pending.reject(

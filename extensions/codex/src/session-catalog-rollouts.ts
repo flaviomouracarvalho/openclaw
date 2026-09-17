@@ -6,12 +6,11 @@ import { root as openSafeRoot } from "openclaw/plugin-sdk/file-access-runtime";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { sanitizeTerminalText } from "openclaw/plugin-sdk/text-chunking";
 import type { CodexSessionSource, CodexThread } from "./app-server/protocol.js";
-import {
-  CODEX_CATALOG_MAX_ROWS,
-  type CodexCatalogRolloutFingerprint,
-} from "./session-catalog-index-state.js";
+import type { CodexCatalogRolloutFingerprint } from "./session-catalog-index-state.js";
+import { CODEX_CATALOG_MAX_ROWS, detachCodexCatalogString } from "./session-catalog-limits.js";
 import {
   boundedCatalogString,
+  MAX_CWD_LENGTH,
   selectCodexCatalogPreviewInput,
   truncateCodexCatalogPreview,
 } from "./session-catalog-parsing.js";
@@ -158,6 +157,9 @@ export async function scanCodexCatalogRollouts(
         const stat = await unlessMissing(fs.lstat(file));
         if (stat?.isFile() && stat.nlink === 1) {
           const physicalPath = path.join(sessionsRoot, path.relative(rootReal, file));
+          if (physicalPath.length > MAX_CWD_LENGTH) {
+            continue;
+          }
           const logicalPath = codexCatalogRolloutLogicalPath(physicalPath);
           if (trackedPaths.has(logicalPath)) {
             present.add(logicalPath);
@@ -169,7 +171,7 @@ export async function scanCodexCatalogRollouts(
             }
           }
           candidates.offer([
-            physicalPath,
+            detachCodexCatalogString(physicalPath),
             {
               mtimeMs: stat.mtimeMs,
               size: stat.size,
@@ -340,14 +342,14 @@ export async function readCodexCatalogRollout(
     const thread: CodexThread = {
       id,
       projectId: null,
-      path: rolloutPath,
+      path: detachCodexCatalogString(rolloutPath),
       source: sourceFromMetadata(metadata.source),
       createdAt: createdAt / 1_000,
       updatedAt: stat.mtimeMs / 1_000,
       cwd: boundedCatalogString(metadata.cwd, 4096),
       originator:
         typeof metadata.originator === "string" && metadata.originator.length <= 500
-          ? metadata.originator
+          ? detachCodexCatalogString(metadata.originator)
           : undefined,
       sessionId: boundedCatalogString(metadata.session_id, 256),
     };

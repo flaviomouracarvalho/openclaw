@@ -1,5 +1,6 @@
+import { toErrorObject } from "openclaw/plugin-sdk/error-runtime";
 import { asFiniteNumber } from "openclaw/plugin-sdk/string-coerce-runtime";
-import type { sanitizeTerminalText } from "openclaw/plugin-sdk/text-chunking";
+import { sanitizeTerminalText } from "openclaw/plugin-sdk/text-chunking";
 import type { CodexThread, CodexThreadListResponse } from "./app-server/protocol.js";
 import type { CodexCatalogPageDiagnostics } from "./session-catalog-diagnostics.js";
 import { codexCatalogRowRecency } from "./session-catalog-index-order.js";
@@ -7,6 +8,8 @@ import type {
   CodexCatalogIndexRow,
   CodexCatalogRolloutFingerprint,
 } from "./session-catalog-index-state.js";
+import { CODEX_CATALOG_MAX_ROWS } from "./session-catalog-limits.js";
+import { projectCodexCatalogNativeThread } from "./session-catalog-native-projection.js";
 import {
   readControlCursor,
   selectCodexCatalogPreviewInput,
@@ -31,12 +34,46 @@ type CodexCatalogProjectionParams = {
 };
 
 /** Single-thread responses remain owned by their native consumers. */
-export async function projectCodexCatalogThread(thread: CodexThread, localSessionsRoot?: string) {
-  const { sanitizeTerminalText } = await import("openclaw/plugin-sdk/text-chunking");
-  return projectCodexCatalogPage(
-    { data: [{ ...thread }] },
-    { localSessionsRoot, sanitize: sanitizeTerminalText, source: getCodexCatalogSource(thread) },
-  );
+export function projectCodexCatalogThread(thread: CodexThread, localSessionsRoot?: string) {
+  try {
+    const prepared = projectCodexCatalogNativeThread(thread, sanitizeTerminalText);
+    return projectCodexCatalogPage(
+      { data: [prepared] },
+      {
+        localSessionsRoot,
+        sanitize: sanitizeTerminalText,
+        source: getCodexCatalogSource(prepared),
+      },
+    );
+  } catch (error) {
+    return Promise.reject(toErrorObject(error, "Codex catalog projection failed"));
+  }
+}
+
+export class CodexCatalogProjectionCapacityError extends Error {
+  constructor() {
+    super("Codex catalog projection queue reached its resident row limit");
+  }
+}
+
+/** Direct mutations and events share one bound across asynchronous projection work. */
+export class CodexCatalogProjections {
+  private active = 0;
+
+  run<T>(work: () => Promise<T>): Promise<T> {
+    if (this.active >= CODEX_CATALOG_MAX_ROWS) {
+      return Promise.reject(new CodexCatalogProjectionCapacityError());
+    }
+    this.active++;
+    try {
+      return work().finally(() => {
+        this.active--;
+      });
+    } catch (error) {
+      this.active--;
+      return Promise.reject(toErrorObject(error, "Codex catalog projection failed"));
+    }
+  }
 }
 
 export async function projectCodexCatalogPage(

@@ -24,10 +24,8 @@ export class CodexCatalogSettingsIndex {
       return;
     }
     const bounded = {
-      ...(cwd ? { cwd: Buffer.from(cwd, "utf16le").toString("utf16le") } : {}),
-      ...(modelProvider
-        ? { modelProvider: Buffer.from(modelProvider, "utf16le").toString("utf16le") }
-        : {}),
+      ...(cwd ? { cwd } : {}),
+      ...(modelProvider ? { modelProvider } : {}),
     };
     const current = this.values.get(threadId);
     const sources = new Set<CodexCatalogSource>();

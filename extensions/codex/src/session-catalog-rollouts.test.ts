@@ -3,7 +3,7 @@ import path from "node:path";
 import { zstdCompressSync } from "node:zlib";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { CODEX_CATALOG_MAX_ROWS } from "./session-catalog-index-state.js";
+import { CODEX_CATALOG_MAX_ROWS } from "./session-catalog-limits.js";
 import { readCodexCatalogRollout, scanCodexCatalogRollouts } from "./session-catalog-rollouts.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);

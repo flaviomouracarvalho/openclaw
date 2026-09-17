@@ -1,4 +1,5 @@
-import { CODEX_CATALOG_MAX_ROWS } from "./session-catalog-index-state.js";
+import { CODEX_CATALOG_MAX_ROWS } from "./session-catalog-limits.js";
+import { boundedCatalogString, MAX_SESSION_ID_LENGTH } from "./session-catalog-parsing.js";
 import type { codexCatalogThreadStatus } from "./session-catalog-parsing.js";
 
 export type CodexCatalogStatus = ReturnType<typeof codexCatalogThreadStatus>;
@@ -38,8 +39,10 @@ export class CodexCatalogField<T> {
   }
 
   deleteWhere(predicate: (value: T) => boolean): void {
-    for (const [threadId, entry] of [...this.entries]) {
-      if (entry.value !== undefined && predicate(entry.value)) this.delete(threadId);
+    for (const [threadId, entry] of this.entries) {
+      if (entry.value !== undefined && predicate(entry.value)) {
+        this.delete(threadId);
+      }
     }
   }
 
@@ -49,8 +52,12 @@ export class CodexCatalogField<T> {
   }
 
   private put(threadId: string, entry: FieldEntry<T>): void {
-    this.entries.delete(threadId);
-    this.entries.set(threadId, entry);
+    const id = boundedCatalogString(threadId, MAX_SESSION_ID_LENGTH);
+    if (!id) {
+      return;
+    }
+    this.entries.delete(id);
+    this.entries.set(id, entry);
     if (this.entries.size > CODEX_CATALOG_MAX_ROWS) {
       const oldest = this.entries.entries().next().value;
       if (oldest) {

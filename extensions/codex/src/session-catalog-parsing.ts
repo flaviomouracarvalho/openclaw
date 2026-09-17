@@ -10,6 +10,7 @@ import {
   CODEX_INTERACTIVE_CUSTOM_THREAD_SOURCES,
   CODEX_INTERACTIVE_THREAD_SOURCE_KINDS,
 } from "./app-server/protocol.js";
+import { detachCodexCatalogString } from "./session-catalog-limits.js";
 import type {
   CodexSessionCatalogError,
   CodexSessionCatalogPage,
@@ -55,7 +56,7 @@ export function readControlCursor(value: unknown, label: string): string | undef
   if (typeof value !== "string" || !value.trim() || value.length > MAX_CURSOR_LENGTH) {
     throw new CatalogParamsError(`invalid Codex session catalog ${label} cursor`);
   }
-  return value;
+  return detachCodexCatalogString(value);
 }
 
 export function boundedCatalogString(
@@ -71,9 +72,11 @@ export function boundedCatalogString(
     return undefined;
   }
   if (normalized.length <= maxLength) {
-    return normalized;
+    return detachCodexCatalogString(normalized);
   }
-  return overflow === "truncate" ? truncateUtf16Safe(normalized, maxLength) : undefined;
+  return overflow === "truncate"
+    ? detachCodexCatalogString(truncateUtf16Safe(normalized, maxLength))
+    : undefined;
 }
 
 function catalogPreview(value: unknown, sanitize: typeof sanitizeTerminalText): string | undefined {
@@ -136,18 +139,21 @@ export function codexCatalogThreadName(value: unknown): string | null | undefine
 export function codexCatalogThreadStatus(
   status: CodexThreadStatus | null | undefined,
 ): Pick<CodexSessionCatalogSession, "status" | "activeFlags"> {
-  const activeFlags =
-    status?.type === "active"
-      ? status.activeFlags
-          ?.flatMap((flag) => {
-            const normalized = boundedCatalogString(flag, 128);
-            return normalized ? [normalized] : [];
-          })
-          .slice(0, MAX_ACTIVE_FLAGS)
-      : undefined;
+  const activeFlags: string[] = [];
+  if (status?.type === "active" && Array.isArray(status.activeFlags)) {
+    for (const flag of status.activeFlags) {
+      const normalized = boundedCatalogString(flag, 128);
+      if (normalized) {
+        activeFlags.push(normalized);
+      }
+      if (activeFlags.length === MAX_ACTIVE_FLAGS) {
+        break;
+      }
+    }
+  }
   return {
-    status: status?.type ?? "notLoaded",
-    ...(activeFlags?.length ? { activeFlags } : {}),
+    status: boundedCatalogString(status?.type, 64) ?? "notLoaded",
+    ...(activeFlags.length ? { activeFlags } : {}),
   };
 }
 
@@ -360,7 +366,7 @@ function parseOptionalCatalogString(
   if (typeof value !== "string" || value.length > maxLength) {
     throw new Error(`Codex session catalog returned an invalid ${field}`);
   }
-  return value;
+  return detachCodexCatalogString(value);
 }
 
 function parseCatalogSession(
@@ -429,7 +435,7 @@ function parseCatalogSession(
   const updatedAt = asFiniteNumber(value.updatedAt);
   const recencyAt = value.recencyAt === null ? null : asFiniteNumber(value.recencyAt);
   return {
-    threadId: value.threadId,
+    threadId: detachCodexCatalogString(value.threadId),
     status,
     archived: value.archived,
     ...(sessionId !== undefined ? { sessionId } : {}),

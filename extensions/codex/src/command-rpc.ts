@@ -64,6 +64,7 @@ export type CodexControlRequestOptions = {
   assertCurrent?: () => void;
   catalogPreview?: true;
   catalogPreviewCache?: CodexCatalogPreviewCache;
+  catalogRows?: number;
   controlObservation?: CodexControlRequestObservation;
   beforeRequest?: (
     request: CodexAppServerScopedRequest,
@@ -253,7 +254,11 @@ export async function codexControlRequest(
     agentDir: options.agentDir,
     isolated: options.isolated,
     ...(options.catalogPreview && method === "thread/list"
-      ? { catalogPreview: true as const, catalogPreviewCache: options.catalogPreviewCache }
+      ? {
+          catalogPreview: true as const,
+          catalogPreviewCache: options.catalogPreviewCache,
+          catalogRows: options.catalogRows,
+        }
       : {}),
     ...(options.controlObservation ? { controlObservation: options.controlObservation } : {}),
     ...auth.clientOptions,

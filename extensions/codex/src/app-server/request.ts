@@ -133,6 +133,7 @@ type CodexAppServerJsonClientOptions = Pick<
   assertCurrent?: () => void;
   catalogPreview?: true;
   catalogPreviewCache?: CodexCatalogPreviewCache;
+  catalogRows?: number;
   controlObservation?: CodexControlRequestObservation;
 };
 
@@ -408,6 +409,7 @@ export async function withCodexAppServerJsonClient<T>(
                   ? {
                       catalogPreview: true as const,
                       catalogPreviewCache: params.catalogPreviewCache,
+                      catalogRows: params.catalogRows,
                     }
                   : {}),
                 assertCurrent: () => {

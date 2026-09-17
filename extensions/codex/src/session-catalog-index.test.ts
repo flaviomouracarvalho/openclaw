@@ -18,7 +18,10 @@ import {
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-afterEach(() => vi.restoreAllMocks());
+afterEach(() => {
+  vi.useRealTimers();
+  vi.restoreAllMocks();
+});
 
 describe("resident Codex catalog", () => {
   it("preserves native sub-second order when exposed timestamps tie", async () => {
@@ -192,6 +195,7 @@ describe("resident Codex catalog", () => {
   });
 
   it("reconciles a new rollout with only bounded reads of that file", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval"] });
     const root = path.join(tempDirs.make("openclaw-resident-currency-"), "sessions");
     const existing = idleThread({ id: "existing", source: "cli", originator: "codex_cli_rs" });
     existing.path = await writeCatalogRollout(root, existing);
@@ -223,6 +227,8 @@ describe("resident Codex catalog", () => {
         return handle;
       });
       const readFile = vi.spyOn(fs, "readFile");
+      await vi.advanceTimersByTimeAsync(30_000);
+      await index.reconcile();
       await vi.waitFor(async () => {
         expect((await index.list({})).sessions).toEqual(
           expect.arrayContaining([
@@ -238,7 +244,7 @@ describe("resident Codex catalog", () => {
       const bytesRead = (await Promise.all(reads.map((read) => read()))).flat();
       expect(bytesRead.reduce((sum, value) => sum + value, 0)).toBe(256 * 1024);
       expect(readFile).not.toHaveBeenCalled();
-      expect(readNative).toHaveBeenCalledOnce();
+      expect(readNative).toHaveBeenCalledTimes(2);
       open.mockClear();
       await index.list({});
       expect(open).not.toHaveBeenCalled();

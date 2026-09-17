@@ -2,18 +2,17 @@ import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { embeddedAgentLog } from "openclaw/plugin-sdk/agent-harness-registration";
+import type { sanitizeTerminalText } from "openclaw/plugin-sdk/text-chunking";
 import { resolveCodexAppServerLocalHomeDir } from "./app-server/auth-start-options.js";
 import type { CodexAppServerClient, CodexAppServerRuntimeIdentity } from "./app-server/client.js";
 import type { CodexAppServerStartOptions } from "./app-server/config-contracts.js";
 import { inferCodexAppServerConnectionClass } from "./app-server/config-security.js";
 import { buildCodexAppServerConnectionFingerprint } from "./app-server/plugin-app-cache-key.js";
-import type {
-  CodexServerNotification,
-  CodexThread,
-  CodexThreadResumeResponse,
-} from "./app-server/protocol.js";
+import type { CodexServerNotification, CodexThread } from "./app-server/protocol.js";
 import { defineCodexBuildState } from "./build-state.js";
 import { codexCatalogHomeIdFromCanonicalPath } from "./session-catalog-home-id.js";
+import { projectCodexCatalogNativeThread } from "./session-catalog-native-projection.js";
+import { boundedCatalogString, MAX_CWD_LENGTH } from "./session-catalog-parsing.js";
 import { codexCatalogSourceForClient, type CodexCatalogSource } from "./session-catalog-source.js";
 
 type CodexCatalogEventListener = (
@@ -21,13 +20,18 @@ type CodexCatalogEventListener = (
   readThread: (threadId: string) => Promise<CodexThread>,
   source: CodexCatalogSource,
 ) => void;
+type CodexCatalogResumeMetadata = {
+  thread: CodexThread;
+  cwd?: string | null;
+  modelProvider?: string | null;
+};
 type CodexCatalogSubscription = {
   notify: CodexCatalogEventListener;
 } & CodexCatalogLifecycleCallbacks;
 type CodexCatalogLifecycleCallbacks = {
   onRemoteReady?: (source: CodexCatalogSource) => void;
   onClose?: (source: CodexCatalogSource) => void;
-  onResume?: (response: CodexThreadResumeResponse, source: CodexCatalogSource) => Promise<void>;
+  onResume?: (response: CodexCatalogResumeMetadata, source: CodexCatalogSource) => Promise<void>;
 };
 type CodexCatalogClientBinding = { homeKey: string; source: CodexCatalogSource };
 
@@ -154,9 +158,26 @@ export function observeCodexCatalogClient(
 }
 
 /** Acknowledged resume settings may differ from the response thread's persisted metadata. */
-export async function publishCodexCatalogResume(
+export function publishCodexCatalogResume(
   client: CodexAppServerClient,
-  response: CodexThreadResumeResponse,
+  response: CodexCatalogResumeMetadata,
+  sanitize: typeof sanitizeTerminalText,
+): Promise<void> {
+  try {
+    return publishPreparedResume(client, {
+      thread: projectCodexCatalogNativeThread(response.thread, sanitize),
+      cwd: boundedCatalogString(response.cwd, MAX_CWD_LENGTH),
+      modelProvider: boundedCatalogString(response.modelProvider, 500, "truncate"),
+    });
+  } catch (error) {
+    embeddedAgentLog.warn("Codex catalog resume publication failed", { error });
+    return Promise.resolve();
+  }
+}
+
+async function publishPreparedResume(
+  client: CodexAppServerClient,
+  response: CodexCatalogResumeMetadata,
 ): Promise<void> {
   try {
     const state = getCatalogEvents();

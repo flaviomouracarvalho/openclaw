@@ -1,7 +1,5 @@
-import {
-  CODEX_CATALOG_MAX_ROWS,
-  type CodexCatalogIndexRow,
-} from "./session-catalog-index-state.js";
+import type { CodexCatalogIndexRow } from "./session-catalog-index-state.js";
+import { CODEX_CATALOG_MAX_ROWS } from "./session-catalog-limits.js";
 
 export type CodexCatalogOrderKey = Pick<
   CodexCatalogIndexRow,
@@ -20,6 +18,30 @@ export function compareCodexCatalogRows(a: CodexCatalogOrderKey, b: CodexCatalog
   );
 }
 
+/** Admission and restoration share the archived-oldest eviction policy. */
+export function retainCodexCatalogRow(
+  rows: Map<string, CodexCatalogIndexRow>,
+  candidate: CodexCatalogIndexRow,
+): CodexCatalogIndexRow | undefined {
+  rows.set(candidate.threadId, candidate);
+  if (rows.size <= CODEX_CATALOG_MAX_ROWS) {
+    return undefined;
+  }
+  let oldest: CodexCatalogIndexRow | undefined;
+  for (const row of rows.values()) {
+    if (
+      !oldest ||
+      (row.archived !== oldest.archived ? row.archived : compareCodexCatalogRows(row, oldest) > 0)
+    ) {
+      oldest = row;
+    }
+  }
+  if (oldest) {
+    rows.delete(oldest.threadId);
+  }
+  return oldest;
+}
+
 /** Stable positions keep issued cursors independent of later native page offsets. */
 export class CodexCatalogOrdering {
   private nextEventOrder = -1;
@@ -30,24 +52,6 @@ export class CodexCatalogOrdering {
 
   reserveEvent(): number {
     return this.nextEventOrder--;
-  }
-
-  evictionCandidate(
-    rows: ReadonlyMap<string, CodexCatalogIndexRow>,
-  ): CodexCatalogIndexRow | undefined {
-    if (rows.size <= CODEX_CATALOG_MAX_ROWS) {
-      return undefined;
-    }
-    let oldest: CodexCatalogIndexRow | undefined;
-    for (const row of rows.values()) {
-      if (
-        !oldest ||
-        (row.archived !== oldest.archived ? row.archived : compareCodexCatalogRows(row, oldest) > 0)
-      ) {
-        oldest = row;
-      }
-    }
-    return oldest;
   }
 
   private unchangedPosition(row: CodexCatalogIndexRow, previous?: CodexCatalogIndexRow) {

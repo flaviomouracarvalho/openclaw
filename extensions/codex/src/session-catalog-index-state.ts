@@ -2,11 +2,15 @@ import { createHash } from "node:crypto";
 import { setImmediate as nextTurn } from "node:timers/promises";
 import type { PluginStateKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { parseCatalogPage } from "./session-catalog-parsing.js";
+import { retainCodexCatalogRow } from "./session-catalog-index-order.js";
+import {
+  CODEX_CATALOG_MAX_ROWS,
+  CODEX_CATALOG_MAX_STATE_KEY_BYTES,
+  detachCodexCatalogString,
+} from "./session-catalog-limits.js";
+import { MAX_CWD_LENGTH, parseCatalogPage } from "./session-catalog-parsing.js";
 import type { CodexSessionCatalogPage } from "./session-catalog-types.js";
 
-// Match the existing Codex managed-thread retention ceiling; previews remain 500 characters.
-export const CODEX_CATALOG_MAX_ROWS = 20_000;
 export const CODEX_CATALOG_STATE_NAMESPACE = "session-catalog-resident";
 export type CodexCatalogRolloutFingerprint = { mtimeMs: number; size: number };
 export type CodexCatalogIndexRow = {
@@ -54,7 +58,8 @@ export function readStoredCodexCatalogRow(value: unknown): CodexCatalogIndexRow 
     (row.preview !== undefined && (typeof row.preview !== "string" || row.preview.length > 500)) ||
     (row.sourceOrder !== undefined &&
       (typeof row.sourceOrder !== "number" || !Number.isSafeInteger(row.sourceOrder))) ||
-    (row.rolloutPath !== undefined && typeof row.rolloutPath !== "string") ||
+    (row.rolloutPath !== undefined &&
+      (typeof row.rolloutPath !== "string" || row.rolloutPath.length > MAX_CWD_LENGTH)) ||
     !(
       row.updatedAt === null ||
       (typeof row.updatedAt === "number" && Number.isFinite(row.updatedAt))
@@ -83,15 +88,19 @@ export function readStoredCodexCatalogRow(value: unknown): CodexCatalogIndexRow 
         ? { mtimeMs: row.fingerprint.mtimeMs, size: row.fingerprint.size }
         : undefined;
     return {
-      threadId: row.threadId,
+      threadId: detachCodexCatalogString(row.threadId),
       updatedAt: row.updatedAt,
       recencyAt: row.recencyAt,
       archived: row.archived,
       nativeMetadata: row.nativeMetadata,
       page: codexCatalogMetadataPage(page),
-      ...(typeof row.preview === "string" ? { preview: row.preview } : {}),
+      ...(typeof row.preview === "string"
+        ? { preview: detachCodexCatalogString(row.preview) }
+        : {}),
       ...(typeof row.sourceOrder === "number" ? { sourceOrder: row.sourceOrder } : {}),
-      ...(typeof row.rolloutPath === "string" ? { rolloutPath: row.rolloutPath } : {}),
+      ...(typeof row.rolloutPath === "string"
+        ? { rolloutPath: detachCodexCatalogString(row.rolloutPath) }
+        : {}),
       ...(fingerprint ? { fingerprint } : {}),
     };
   } catch {
@@ -102,32 +111,63 @@ export function readStoredCodexCatalogRow(value: unknown): CodexCatalogIndexRow 
 /** An incomplete cache cannot prove which native rows precede an issued cursor. */
 export async function readCodexCatalogSnapshot(state: CodexCatalogState | undefined) {
   const entries = (await state?.entries()) ?? [];
-  const rows: CodexCatalogIndexRow[] = [];
+  const rows = new Map<string, CodexCatalogIndexRow>();
+  const keys = new Map<string, string>();
   const obsolete = new Set<string>();
+  let cleanupIncomplete = false;
+  let valid = true;
+  const discard = (key: string) => {
+    if (obsolete.has(key)) {
+      return;
+    }
+    if (
+      (key === "complete" ||
+        obsolete.size - Number(obsolete.has("complete")) < CODEX_CATALOG_MAX_ROWS) &&
+      Buffer.byteLength(key) <= CODEX_CATALOG_MAX_STATE_KEY_BYTES
+    ) {
+      obsolete.add(detachCodexCatalogString(key));
+    } else {
+      cleanupIncomplete = true;
+      obsolete.add("complete");
+    }
+  };
   let complete = false;
   for (const entry of entries) {
+    if (Buffer.byteLength(entry.key) > CODEX_CATALOG_MAX_STATE_KEY_BYTES) {
+      valid = false;
+      discard(entry.key);
+      continue;
+    }
     if (entry.value?.version === 1 && entry.value.kind === "complete") {
       complete = true;
       continue;
     }
     const row = readStoredCodexCatalogRow(entry.value);
     if (row) {
-      rows.push(row);
+      const evicted = retainCodexCatalogRow(rows, row);
+      if (evicted) {
+        discard(evicted === row ? entry.key : keys.get(evicted.threadId)!);
+        keys.delete(evicted.threadId);
+      }
+      if (evicted !== row) {
+        keys.set(row.threadId, detachCodexCatalogString(entry.key));
+      }
     } else {
-      obsolete.add(entry.key);
+      valid = false;
+      discard(entry.key);
     }
   }
-  complete &&= obsolete.size === 0;
+  complete &&= valid;
   if (!complete) {
-    rows.length = 0;
+    rows.clear();
     for (const entry of entries) {
-      obsolete.add(entry.key);
+      discard(entry.key);
     }
     if (entries.length) {
       obsolete.add("complete");
     }
   }
-  return { rows, complete, obsolete };
+  return { rows: [...rows.values()], complete, obsolete, cleanupIncomplete };
 }
 
 /** Serializes reconstructible cache writes without blocking resident queries. */
@@ -136,6 +176,14 @@ export class CodexCatalogPersistence {
   private writing: Promise<void> | undefined;
   private failed = false;
   private retired = false;
+
+  invalidate(error: unknown): void {
+    if (!this.failed) {
+      this.report(error);
+    }
+    this.failed = true;
+    this.queue("complete", undefined);
+  }
 
   constructor(
     private readonly state: CodexCatalogState | undefined,
@@ -191,6 +239,14 @@ export class CodexCatalogPersistence {
     if (!this.state || this.retired) {
       return;
     }
+    if (
+      key !== "complete" &&
+      !this.pending.has(key) &&
+      this.pending.size - Number(this.pending.has("complete")) >= CODEX_CATALOG_MAX_ROWS
+    ) {
+      this.invalidate(new Error("Codex catalog persistence queue reached its resident row limit"));
+      return;
+    }
     this.pending.set(key, value);
     this.writing ??= this.writePending().finally(() => {
       this.writing = undefined;
@@ -210,10 +266,8 @@ export class CodexCatalogPersistence {
         }
       } catch (error) {
         if (!this.failed) {
-          this.report(error);
-          this.pending.set("complete", undefined);
+          this.invalidate(error);
         }
-        this.failed = true;
       }
     }
   }

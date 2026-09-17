@@ -5,9 +5,14 @@ import type {
   CodexThreadStatus,
 } from "./app-server/protocol.js";
 import type { CodexCatalogStatus } from "./session-catalog-index-field.js";
-import { CODEX_CATALOG_MAX_ROWS } from "./session-catalog-index-state.js";
 import type { CodexCatalogIndexRow } from "./session-catalog-index-state.js";
-import { codexCatalogThreadName, codexCatalogThreadStatus } from "./session-catalog-parsing.js";
+import { CODEX_CATALOG_MAX_ROWS } from "./session-catalog-limits.js";
+import {
+  boundedCatalogString,
+  MAX_SESSION_ID_LENGTH,
+  codexCatalogThreadName,
+  codexCatalogThreadStatus,
+} from "./session-catalog-parsing.js";
 import type { CodexCatalogSettings } from "./session-catalog-settings.js";
 import { setCodexCatalogSource, type CodexCatalogSource } from "./session-catalog-source.js";
 
@@ -64,7 +69,7 @@ export class CodexCatalogIndexEvents {
       this.upserting.add(operation);
       return;
     }
-    const id = typeof params.threadId === "string" ? params.threadId : undefined;
+    const id = boundedCatalogString(params.threadId, MAX_SESSION_ID_LENGTH);
     if (!id) {
       return;
     }

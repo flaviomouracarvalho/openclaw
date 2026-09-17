@@ -61,10 +61,10 @@ import {
   createCodexNodeExecServerInvokePolicy,
 } from "./src/node-exec-server.js";
 import {
-  CODEX_CATALOG_MAX_ROWS,
   CODEX_CATALOG_STATE_NAMESPACE,
   type StoredCodexCatalogEntry,
 } from "./src/session-catalog-index-state.js";
+import { CODEX_CATALOG_MAX_ROWS } from "./src/session-catalog-limits.js";
 import {
   createCodexSessionCatalogControl,
   createCodexSessionCatalogNodeHostCommands,

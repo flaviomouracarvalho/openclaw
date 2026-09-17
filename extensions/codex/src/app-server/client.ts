@@ -67,6 +67,7 @@ type RequestOptions = {
   assertCurrent?: () => void;
   catalogPreview?: true;
   catalogPreviewCache?: CodexCatalogPreviewCache;
+  catalogRows?: number;
   attemptWaiterFinished?: CodexRequestWaiterFinished;
 };
 
@@ -226,7 +227,7 @@ export class CodexAppServerClient {
   private readonly pending = new Map<number | string, CodexRequestAttempt>();
   private readonly catalogResponses = new WeakMap<
     CodexRequestAttempt,
-    true | CodexCatalogPreviewCache
+    { preview?: CodexCatalogPreviewCache; remainingRows?: number }
   >();
   private readonly requestHandlers = new Set<CodexServerRequestHandler>();
   private readonly notificationHandlers = new Set<CodexServerNotificationHandler>();
@@ -723,7 +724,10 @@ export class CodexAppServerClient {
     });
     this.pending.set(id, attempt);
     if (options.catalogPreview && method === "thread/list") {
-      this.catalogResponses.set(attempt, options.catalogPreviewCache ?? true);
+      this.catalogResponses.set(attempt, {
+        preview: options.catalogPreviewCache,
+        remainingRows: options.catalogRows,
+      });
     }
     // Stateful ownership assertions remain pre-write checks.
     const result = attempt.wait<T>(

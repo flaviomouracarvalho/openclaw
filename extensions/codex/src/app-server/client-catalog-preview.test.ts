@@ -31,6 +31,77 @@ afterEach(() => {
 });
 
 describe("Codex catalog preview decoding", () => {
+  it.each([0, 1])(
+    "projects only the remaining %i catalog rows without shrinking the native page",
+    async (catalogRows) => {
+      const harness = createHarness();
+      const sanitize = vi.spyOn(terminalText, "sanitizeTerminalText");
+      const selectedPreview = "\u001b[32mKept first user request\u001b[0m";
+      const cache = vi.fn((thread: { id: string }) => {
+        if (catalogRows === 0 || thread.id !== "selected") {
+          throw new Error("Discarded rows must not read the resident preview cache");
+        }
+        return undefined;
+      });
+      const request = harness.client.request(
+        "thread/list",
+        { limit: 64, cursor: "native-start", useStateDbOnly: true },
+        { timeoutMs: 1_000, catalogPreview: true, catalogPreviewCache: cache, catalogRows },
+      );
+      const frame = JSON.parse(harness.writes[0]!);
+      expect(frame).toMatchObject({
+        method: "thread/list",
+        params: { limit: 64, cursor: "native-start", useStateDbOnly: true },
+      });
+      expect(frame.params).not.toHaveProperty("catalogRows");
+      harness.send({
+        id: requestId(harness),
+        result: {
+          data: Array.from({ length: 64 }, (_, index) =>
+            index === 0
+              ? {
+                  id: "selected",
+                  projectId: null,
+                  preview: selectedPreview,
+                  cwd: "/workspace/selected",
+                }
+              : {
+                  id: `discarded-${index}`,
+                  preview: "Discarded preview ".repeat(1024),
+                  path: "/".repeat(4097),
+                  turns: [{ items: [{ text: "Discarded transcript ".repeat(1024) }] }],
+                },
+          ),
+          nextCursor: "opaque-native-next",
+          backwardsCursor: "opaque-native-previous",
+        },
+      });
+      await expect(request).resolves.toEqual({
+        data: catalogRows
+          ? [
+              {
+                id: "selected",
+                projectId: null,
+                preview: "Kept first user request",
+                cwd: "/workspace/selected",
+              },
+            ]
+          : [],
+        nextCursor: "opaque-native-next",
+        backwardsCursor: "opaque-native-previous",
+      });
+      expect(cache.mock.calls.map(([thread]) => thread.id)).toEqual(
+        catalogRows ? ["selected"] : [],
+      );
+      if (catalogRows === 0) {
+        expect(sanitize).not.toHaveBeenCalled();
+      } else {
+        expect(sanitize.mock.calls.every(([input]) => input === selectedPreview)).toBe(true);
+      }
+      expect(harness.writes).toHaveLength(1);
+    },
+  );
+
   it("bounds catalog previews before delivery while preserving ordinary thread/list results", async () => {
     const sanitize = vi.spyOn(terminalText, "sanitizeTerminalText");
     const harness = createHarness();
@@ -232,8 +303,13 @@ describe("Codex catalog preview decoding", () => {
       { limit: 1 },
       { timeoutMs: 1_000, catalogPreview: true },
     );
-    harness.send({ id: requestId(harness), result: { data: [{ id: "preview", preview }] } });
-    await expect(request).resolves.toEqual({ data: [{ id: "preview", preview: expected }] });
+    harness.send({
+      id: requestId(harness),
+      result: { data: [{ id: "preview", projectId: null, preview }] },
+    });
+    await expect(request).resolves.toEqual({
+      data: [{ id: "preview", projectId: null, preview: expected }],
+    });
     expect(vi.getTimerCount()).toBe(0);
   });
 
@@ -248,7 +324,9 @@ describe("Codex catalog preview decoding", () => {
       expect(harness.writes).toHaveLength(2);
       const frames = harness.writes.map((write) => JSON.parse(write));
       expect(frames[0].id).not.toBe(frames[1].id);
-      const pages = [{ data: [{ id: "first" }] }, { data: [{ id: "second" }] }];
+      const pages = ["first", "second"].map((id) => ({
+        data: [{ id, ...(catalogPreview ? { projectId: null } : {}) }],
+      }));
       harness.send({ id: frames[0].id, result: pages[0] });
       harness.send({ id: frames[1].id, result: pages[1] });
       await expect(Promise.all([first, second])).resolves.toEqual(pages);

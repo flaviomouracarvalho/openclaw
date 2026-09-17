@@ -33,7 +33,7 @@ import {
 import { codexCatalogResidentHomeKey } from "./session-catalog-events.js";
 import { createCodexCatalogHomeResolver, type CodexCatalogHome } from "./session-catalog-homes.js";
 import type { CodexCatalogState } from "./session-catalog-index-state.js";
-import { CodexCatalogIndex } from "./session-catalog-index.js";
+import type { CodexCatalogIndex } from "./session-catalog-index.js";
 import type { CodexCatalogPreviewCache } from "./session-catalog-native-projection.js";
 import {
   CatalogParamsError,
@@ -41,11 +41,6 @@ import {
   readControlCursor,
   readPageParams,
 } from "./session-catalog-parsing.js";
-import {
-  canReuseCodexCatalogPreview,
-  projectCodexCatalogDeltaPage,
-  projectCodexCatalogPage,
-} from "./session-catalog-projection.js";
 import { readCodexSessionMeta } from "./session-catalog-provenance.js";
 import { codexCatalogRolloutLogicalPath } from "./session-catalog-rollouts.js";
 import { CodexCatalogSourceBackoff } from "./session-catalog-source-backoff.js";
@@ -339,6 +334,21 @@ export function createCodexSessionCatalogControl(params: {
     }
     let index = indexes.get(homeId);
     if (!index) {
+      const [
+        { CodexCatalogIndex },
+        { canReuseCodexCatalogPreview, projectCodexCatalogDeltaPage, projectCodexCatalogPage },
+      ] = await Promise.all([
+        import("./session-catalog-index.js"),
+        import("./session-catalog-projection.js"),
+      ]);
+      source?.assertCurrent();
+      if (closed || generation !== config) {
+        throw new Error("Codex catalog configuration changed");
+      }
+      index = indexes.get(homeId);
+      if (index) {
+        return index;
+      }
       const root =
         source?.localSessionsRoot ??
         (runtime.connectionClass !== "remote"
@@ -354,6 +364,7 @@ export function createCodexSessionCatalogControl(params: {
       let nativeAttempt: ReturnType<CodexCatalogSourceBackoff["begin"]> | undefined;
       const readNativePage = async <T extends { nextCursor?: string }>(
         query: CodexThreadListParams,
+        remainingRows: number,
         project: (
           response: CodexThreadListResponse,
           diagnostics: CodexCatalogPageDiagnostics | undefined,
@@ -369,6 +380,7 @@ export function createCodexSessionCatalogControl(params: {
                 return canReuseCodexCatalogPreview(row, thread) ? row?.preview : undefined;
               }
             : undefined,
+          remainingRows,
         );
         if (!query.cursor || !nativeAttempt) {
           nativeAttempt = requests.beginList();
@@ -425,7 +437,7 @@ export function createCodexSessionCatalogControl(params: {
           }
         },
         readNative: (query, remainingRows) =>
-          readNativePage(query, async (response, diagnostics) => {
+          readNativePage(query, Math.min(64, remainingRows), async (response, diagnostics) => {
             const { sanitizeTerminalText } = await import("openclaw/plugin-sdk/text-chunking");
             const bounded = { ...response, data: response.data.slice(0, remainingRows) };
             const projection = {
@@ -487,6 +499,7 @@ export function createCodexSessionCatalogControl(params: {
     source?: CodexCatalogControlSource,
     catalogPreview?: true,
     catalogPreviewCache?: CodexCatalogPreviewCache,
+    catalogRows?: number,
   ): CodexSessionCatalogRequestSnapshot => {
     const pluginConfig = getPluginConfig();
     const runtime = source?.appServer ?? params.resolveRuntimeOptions({ pluginConfig });
@@ -500,7 +513,11 @@ export function createCodexSessionCatalogControl(params: {
           authProfileId: null,
           assertCurrent,
           ...(catalogPreview && method === CODEX_CONTROL_METHODS.listThreads
-            ? { catalogPreview, ...(catalogPreviewCache ? { catalogPreviewCache } : {}) }
+            ? {
+                catalogPreview,
+                catalogRows,
+                ...(catalogPreviewCache ? { catalogPreviewCache } : {}),
+              }
             : {}),
           ...(observation ? { controlObservation: observation } : {}),
           ...(timeoutMs === undefined ? {} : { timeoutMs }),

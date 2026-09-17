@@ -82,8 +82,8 @@ need preview projection. Unchanged rows are not rewritten to SQLite.
 Native lifecycle notifications update affected threads, and successful catalog
 archives immediately hide their rows. Turn starts and completions coalesce
 single-thread metadata refreshes, so a running turn advances recency before it
-finishes. A debounced recursive directory watcher
-and a 30-second stat-only scan discover external rollout changes. The scan streams
+finishes. A 30-second stat-only scan discovers external rollout changes; no
+recursive filesystem watcher retains a directory inventory. The scan streams
 directory entries and retains at most 20,000 file fingerprints while separately
 checking the presence of resident paths. Only changed or
 new files are read: at most 128 KiB each from the head and tail of a plain rollout,
@@ -113,12 +113,66 @@ Each home retains at most 20,000 display rows, 20,000 live-status records,
 20,000 live-settings records, 20,000 name records, and 20,000 scan fingerprints, matching the existing Codex
 managed-thread ceiling; eviction drops the oldest archived rows first, then the
 oldest remaining rows. Native walks finish pagination, but rows beyond the
-resident limit are not projected. Plugin state also has its shared capacity limit. Persistence failure
+resident limit are discarded before native-response metadata projection or preview
+sanitization. The native page size stays 64, and pagination continues to completion.
+At most 20,000 detached native cursors are remembered during a walk.
+The same archived-oldest row limit applies when restoring a complete snapshot.
+Incomplete snapshots still cannot establish a pageable native prefix.
+Plugin state also has its shared capacity limit. Persistence failure
 leaves the live resident view available and is logged; a missing complete
 snapshot rebuilds on restart. The derived cache adds no database schema-version
 change and does not alter native session files, update migrations, or rollback.
 Gateway aggregation only coalesces concurrent requests, so completed aggregate
 responses cannot delay the next poll's view of resident changes.
+
+The row and bookkeeping limits are independent per home. Thread identifiers are
+limited to 256 UTF-16 code units, paths and working directories to 4,096, display
+metadata and previews to 500, status to 64, and active flags to 16 entries of 128.
+Retained strings are detached from larger native input strings. Preview decoding
+keeps its existing UTF-8 replacement behavior. Event scheduling and concurrent
+single-thread projections each admit at most 20,000 operations; mutations,
+obsolete cleanup keys, and pending persistence writes also have 20,000-entry
+ceilings. Persistence reserves one additional complete-marker operation and one
+in-flight write. Overflow preserves already-admitted writes, invalidates the
+complete marker, and logs a warning; resident queries remain available. Periodic
+reconciliation continues to refresh native metadata after an overflow.
+
+These are payload limits, not a promise about total JavaScript heap or Gateway
+RSS. With every string at its maximum length and two bytes per UTF-16 code unit,
+the following conservative capacities apply. The 490 column assumes 490 occupied
+entries in each named structure; a home with 490 current rows can still have
+20,000 historical field or queue entries.
+With those independent field and scan-path indexes full, settled string payload is
+bounded by 472.164 MiB for 490 current rows, or 936.165 MiB for 20,000 rows. These
+figures exclude active work and object/engine overhead.
+
+| Retained string payload                        | 490 entries | 20,000 entries |
+| ---------------------------------------------- | ----------: | -------------: |
+| Display rows (12,469 code units each)          |  11.654 MiB |    475.655 MiB |
+| Name, status, and settings records together    |   7.454 MiB |    304.260 MiB |
+| One scan-path generation                       |   3.828 MiB |    156.250 MiB |
+| Native thread DTOs pending projection          |  13.569 MiB |    553.856 MiB |
+| Mutation identifiers                           |   0.239 MiB |      9.766 MiB |
+| Cleanup or persistence keys (512-byte ceiling) |   0.479 MiB |     19.531 MiB |
+
+A native walk and file scan can each retain an older row snapshot, adding at most
+two row generations. Pending persistence can retain another row generation plus
+one in-flight row. An active event projection can temporarily hold two bounded native DTO
+generations and one projected row. File currency retains the previous and
+new fingerprint generations plus presence keys; arrays and maps share their
+referenced row/string values. The native cursor set has its own 156.250 MiB
+maximum string capacity even in a home with fewer rows. Status and settings each
+retain at most 64 passive source references per entry (2,560,000 references across
+both full indexes). Object, map, array, promise, allocator, and engine overhead,
+transport buffers, and the separate managed-thread/provenance caches are outside
+these string-payload figures.
+
+The generic plugin-state `entries()` API decodes an entire namespace before the
+catalog can validate or limit its rows. Its 1 MiB generic value limit permits
+19.532 GiB of serialized values for 20,001 entries, before JavaScript expansion.
+The resident limiter bounds the admitted result, not this predecode peak. Normal
+catalog writes contain only the much smaller bounded row shape; resolving the
+generic peak requires a paged state API.
 
 Pasted text saved as a `.txt` attachment is extracted by OpenClaw and included in
 the current turn as untrusted external content, subject to the existing file
