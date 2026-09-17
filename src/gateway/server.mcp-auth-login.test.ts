@@ -5,7 +5,7 @@ import path from "node:path";
 import { Client as McpClient } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { expectDefined } from "@openclaw/normalization-core";
-import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { WebSocket } from "ws";
 import type {
   WizardNextResult,
@@ -29,10 +29,15 @@ import { withPluginRuntimeRegistryScope } from "../plugins/runtime/gateway-reque
 import { createDeferredCore, type Deferred } from "../shared/deferred.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import * as setupMigration from "../wizard/setup.migration-snapshot.js";
+import { pruneStaleControlPlaneBuckets } from "./control-plane-rate-limit.js";
 import { createGatewayMethodRegistry } from "./methods/registry.js";
 import { mcpAuthLoginHandlers } from "./server-methods/mcp-auth-login.js";
 import { whenAdmittedWizardSessionSettled } from "./server-methods/setup-admission.js";
 import type { GatewayRequestHandlerOptions } from "./server-methods/types.js";
+import {
+  registerMcpAuthForcedEffects,
+  type McpAuthEffectEndpoint,
+} from "./server.mcp-auth-login.forced-effects.test-support.js";
 import { prepareTailscalePublishedOrigin } from "./tailscale-published-origin.js";
 import {
   connectOk,
@@ -52,7 +57,8 @@ describe("registered mcp.authLogin", () => {
   let config: McpServerConfig;
   let expectedChallenge: string;
   let registeredRedirect: string;
-  let tokenError: "invalid_grant" | "invalid_client" | false = false;
+  let tokenError: "invalid_grant" | "invalid_client" | "unauthorized_client" | false = false;
+  const effects: McpAuthEffectEndpoint = { tokenLifetimeSeconds: 3600 };
   let tokenEntered = createDeferredCore();
   let releaseToken: Deferred | undefined;
   let redirectStage: "register" | "token" | undefined;
@@ -69,6 +75,9 @@ describe("registered mcp.authLogin", () => {
       const url = new URL(request.url ?? "/", resourceUrl);
       requests.push(url.pathname);
       response.setHeader("Content-Type", "application/json");
+      if (effects.endpoint && (await effects.endpoint(request, response))) {
+        return;
+      }
       if (redirectStage && url.pathname === `/${redirectStage}`) {
         redirectEntered.resolve();
         await releaseRedirect?.promise;
@@ -136,7 +145,7 @@ describe("registered mcp.authLogin", () => {
               access_token: "fixture-access",
               refresh_token: "fixture-refresh",
               token_type: "Bearer",
-              expires_in: 3600,
+              expires_in: effects.tokenLifetimeSeconds,
             }),
           );
         }
@@ -234,6 +243,10 @@ describe("registered mcp.authLogin", () => {
     vi.restoreAllMocks();
   });
 
+  beforeEach(() => {
+    pruneStaleControlPlaneBuckets(Number.MAX_SAFE_INTEGER);
+  });
+
   const identity = () => operatorMcpOAuthIdentity("docs", resourceUrl);
   async function connect(scopes: string[], origin = `http://127.0.0.1:${gateway.port}`) {
     const client = await gateway.openWs({ origin });
@@ -256,7 +269,7 @@ describe("registered mcp.authLogin", () => {
       sessionId,
       serverName: "docs",
     });
-    expect(start).toMatchObject({
+    expect(start, JSON.stringify(start.error)).toMatchObject({
       ok: true,
       payload: { sessionId, done: false, status: "running" },
     });
@@ -292,6 +305,17 @@ describe("registered mcp.authLogin", () => {
       }
     }
   }
+
+  registerMcpAuthForcedEffects({
+    connection: () => ({ owner, resourceUrl, config }),
+    request: () => admitted,
+    identity,
+    begin,
+    callback,
+    terminal,
+    requests,
+    effects,
+  });
 
   it("rejects non-admin callers and injected authority selectors before discovery", async () => {
     const before = requests.length;
@@ -358,7 +382,7 @@ describe("registered mcp.authLogin", () => {
     expect(readMcpOAuthStore(identity().storeKey)).toEqual(before);
   });
 
-  it.each(["invalid_grant", "invalid_client"] as const)(
+  it.each(["invalid_grant", "invalid_client", "unauthorized_client"] as const)(
     "preserves existing tokens and registration after %s",
     async (error) => {
       await clearMcpOAuthCredentials(identity());
@@ -375,6 +399,7 @@ describe("registered mcp.authLogin", () => {
       ).toBe(true);
       const started = await begin();
       tokenError = error;
+      const exchangeRequests = requests.length;
       try {
         expect((await callback(started.state)).status).toBe(200);
         const result = await terminal(started.sessionId);
@@ -386,6 +411,7 @@ describe("registered mcp.authLogin", () => {
         expect(after.tokensAuthorizationServerUrl).toEqual(before.tokensAuthorizationServerUrl);
         expect(after.codeVerifier).toBeUndefined();
         expect(after.lastAuthorizationUrl).toBeUndefined();
+        expect(requests.slice(exchangeRequests)).toEqual(["/token"]);
         const retainedClient = new McpClient({ name: "retained-credential", version: "1.0.0" });
         try {
           await retainedClient.connect(
