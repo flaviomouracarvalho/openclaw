@@ -17,12 +17,153 @@ import type { StoredCodexCatalogEntry } from "./session-catalog-index-state.js";
 import { CodexCatalogIndex } from "./session-catalog-index.js";
 import { projectCodexCatalogPage } from "./session-catalog-projection.js";
 import { writeCatalogRollout } from "./session-catalog-resident.test-support.js";
-import { idleThread } from "./session-catalog.test-helpers.js";
+import {
+  commandRpcMocks,
+  createCodexSessionCatalogControlFactory,
+  config,
+  idleThread,
+  pinnedConnectionMocks,
+} from "./session-catalog.test-helpers.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => vi.restoreAllMocks());
 
 describe("resident Codex catalog SQLite durability", () => {
+  it("keeps the persisted selected rollout eligible while older files and a native revert reconcile", async () => {
+    const home = tempDirs.make("codex-selected-rollout-");
+    const root = path.join(home, "sessions");
+    let current = idleThread({
+      id: "selected-thread",
+      name: "Selected native thread",
+      preview: "Selected first user request",
+      cwd: "/workspace/selected",
+      source: "cli",
+      originator: "codex_cli_rs",
+      turns: [],
+    });
+    current.path = await writeCatalogRollout(root, current);
+    const openState = () =>
+      createPluginStateKeyedStoreForTests<StoredCodexCatalogEntry>("codex", {
+        namespace: "selected-rollout-test",
+        maxEntries: 20_001,
+      });
+    const createFactory = () =>
+      createCodexSessionCatalogControlFactory({
+        env: { CODEX_HOME: home },
+        getPluginConfig: () => ({ supervision: { enabled: true } }),
+        getRuntimeConfig: () => config,
+        openResidentState: openState,
+      });
+    const factory = createFactory();
+    const source = (await factory.homesForAgent("main"))[0]!;
+    const first = new CodexCatalogIndex({
+      homeId: source.sourceHomeId,
+      localSessionsRoot: root,
+      state: openState(),
+      readNative: async () =>
+        projectCodexCatalogPage({ data: [current] }, { sanitize: sanitizeTerminalText }),
+      assertCurrent: () => {},
+    });
+    try {
+      await first.initialize();
+    } finally {
+      await first.close();
+    }
+    await closeOpenClawStateDatabaseAsync();
+    const writeMetadata = (file: string, cwd: string, padding = 0) =>
+      fs.writeFile(
+        file,
+        [
+          JSON.stringify({
+            type: "session_meta",
+            payload: {
+              id: current.id,
+              timestamp: "2026-09-16T12:00:00.000Z",
+              cwd,
+              source: "cli",
+              originator: "codex_cli_rs",
+              history_mode: "paginated",
+              base_instructions: { text: "x".repeat(padding) },
+            },
+          }),
+          JSON.stringify({
+            type: "event_msg",
+            payload: { type: "user_message", message: "Older request" },
+          }),
+          "",
+        ].join("\n"),
+      );
+    const retiredPath = path.join(path.dirname(current.path), "rollout-retired.jsonl");
+    await writeMetadata(retiredPath, "/workspace/retired");
+    const future = new Date("2030-01-01T00:00:00.000Z");
+    await fs.utimes(retiredPath, future, future);
+    const requested = createDeferred<void>();
+    const released = createDeferred<void>();
+    commandRpcMocks.codexControlRequest.mockImplementation(async (_plugin, method, params) => {
+      expect(method).toBe("thread/list");
+      expect(params.useStateDbOnly).toBe(true);
+      requested.resolve();
+      await released.promise;
+      return { data: [current] };
+    });
+    pinnedConnectionMocks.request.mockImplementation(async ({ method }) => {
+      expect(method).toBe("thread/read");
+      return { thread: current };
+    });
+    const control = factory.forRequest("main", source);
+    const initializing = control.initialize();
+    void initializing.catch(() => undefined);
+    try {
+      await requested.promise;
+      await expect(control.requireEligibleThread(current.id)).resolves.toMatchObject({
+        path: current.path,
+        cwd: "/workspace/selected",
+      });
+      released.resolve();
+      await initializing;
+      await factory.stop();
+      const replacementPath = path.join(path.dirname(current.path), "rollout-replacement.jsonl");
+      await writeMetadata(replacementPath, "/workspace/replacement", 160 * 1024);
+      current = { ...current, path: replacementPath, cwd: "/workspace/replacement" };
+      const reverted = createFactory();
+      try {
+        const selected = reverted.forRequest("main", (await reverted.homesForAgent("main"))[0]);
+        await selected.initialize();
+        await expect(selected.requireEligibleThread(current.id)).resolves.toMatchObject({
+          path: replacementPath,
+          cwd: "/workspace/replacement",
+        });
+        expect((await selected.listPage({})).sessions[0]?.cwd).toBe("/workspace/replacement");
+      } finally {
+        await reverted.stop();
+      }
+      expect(commandRpcMocks.codexControlRequest).toHaveBeenCalledTimes(2);
+      expect(pinnedConnectionMocks.request.mock.calls.map(([request]) => request.method)).toEqual([
+        "thread/read",
+        "thread/read",
+      ]);
+      commandRpcMocks.codexControlRequest.mockResolvedValue({ data: [] });
+      const unavailable = createFactory();
+      try {
+        const retained = unavailable.forRequest(
+          "main",
+          (await unavailable.homesForAgent("main"))[0],
+        );
+        await retained.initialize();
+        await expect(retained.requireEligibleThread(current.id)).resolves.toMatchObject({
+          path: replacementPath,
+        });
+        expect((await retained.listPage({})).sessions[0]?.cwd).toBe("/workspace/replacement");
+      } finally {
+        await unavailable.stop();
+      }
+    } finally {
+      released.resolve();
+      await initializing.catch(() => undefined);
+      await factory.stop();
+    }
+  });
+
   it("serves a restart from SQLite before reconciling only the changed rollout", async () => {
     const root = path.join(tempDirs.make("openclaw-resident-restart-"), "sessions");
     const native = ["changed", "untouched"].map((id) =>
@@ -54,9 +195,6 @@ describe("resident Codex catalog SQLite durability", () => {
         localSessionsRoot: root,
         state: openState(),
         readNative,
-        readNativeNames: async () => ({
-          names: native.map((thread) => ({ threadId: thread.id, name: thread.name ?? null })),
-        }),
         assertCurrent: () => {},
       });
     const first = createIndex();
@@ -74,10 +212,8 @@ describe("resident Codex catalog SQLite durability", () => {
       await first.close();
     }
     await closeOpenClawStateDatabaseAsync();
-    const changedFile = await writeCatalogRollout(root, {
-      ...native[0]!,
-      preview: "Changed while the Gateway was stopped",
-    });
+    native[0]!.preview = "Changed while the Gateway was stopped";
+    const changedFile = await writeCatalogRollout(root, native[0]!);
     readNative.mockClear();
     const open = vi.spyOn(fs, "open");
     const readFile = vi.spyOn(fs, "readFile");
@@ -93,6 +229,7 @@ describe("resident Codex catalog SQLite durability", () => {
       expect(open).not.toHaveBeenCalled();
       expect(readFile).not.toHaveBeenCalled();
       await restarted.reconcile();
+      await restarted.initialize();
       expect((await restarted.list({})).sessions).toEqual(
         expect.arrayContaining([
           expect.objectContaining({
@@ -103,7 +240,7 @@ describe("resident Codex catalog SQLite durability", () => {
         ]),
       );
       expect(open.mock.calls.map((call) => call[0])).toEqual([changedFile]);
-      expect(readNative).not.toHaveBeenCalled();
+      expect(readNative).toHaveBeenCalledOnce();
       expect(readFile).not.toHaveBeenCalled();
     } finally {
       await restarted.close();
@@ -128,26 +265,21 @@ describe("resident Codex catalog SQLite durability", () => {
         namespace: "resident-offline-title-test",
         maxEntries: 20_001,
       });
-    const readNative = vi.fn(async () =>
-      projectCodexCatalogPage(
+    const metadata = createDeferred<void>();
+    let offline = false;
+    const readNative = vi.fn(async (_params: CodexThreadListParams) => {
+      if (offline) await metadata.promise;
+      return projectCodexCatalogPage(
         { data: [structuredClone(native)] },
         { sanitize: sanitizeTerminalText },
-      ),
-    );
-    const names = createDeferred<{ names: Array<{ threadId: string; name: string | null }> }>();
-    let offline = false;
-    const readNativeNames = vi.fn(async (_params: CodexThreadListParams) =>
-      offline
-        ? await names.promise
-        : { names: [{ threadId: native.id, name: native.name ?? null }] },
-    );
+      );
+    });
     const createIndex = () =>
       new CodexCatalogIndex({
         homeId: "offline-title",
         localSessionsRoot: root,
         state: openState(),
         readNative,
-        readNativeNames,
         assertCurrent: () => {},
       });
     const first = createIndex();
@@ -166,31 +298,29 @@ describe("resident Codex catalog SQLite durability", () => {
       size: originalStat.size,
     });
     readNative.mockClear();
-    readNativeNames.mockClear();
     const open = vi.spyOn(fs, "open");
     const readFile = vi.spyOn(fs, "readFile");
     const restarted = createIndex();
     try {
       expect((await restarted.list({})).sessions[0]?.name).toBe("Previous title");
-      expect(readNativeNames).not.toHaveBeenCalled();
       expect(readNative).not.toHaveBeenCalled();
       expect(open).not.toHaveBeenCalled();
       expect(readFile).not.toHaveBeenCalled();
-      await vi.waitFor(() => expect(readNativeNames).toHaveBeenCalledOnce());
-      expect(readNativeNames.mock.calls[0]?.[0]).toMatchObject({ useStateDbOnly: true });
+      await vi.waitFor(() => expect(readNative).toHaveBeenCalledOnce());
+      expect(readNative.mock.calls[0]?.[0]).toMatchObject({ useStateDbOnly: true });
       expect((await restarted.list({ searchTerm: "previous" })).sessions).toHaveLength(1);
-      names.resolve({ names: [{ threadId: native.id, name: native.name }] });
+      metadata.resolve();
       await vi.waitFor(async () => {
         expect((await restarted.list({ searchTerm: "renamed" })).sessions).toMatchObject([
           { threadId: "renamed", name: "Renamed while offline" },
         ]);
       });
       expect((await restarted.list({ searchTerm: "previous" })).sessions).toEqual([]);
-      expect(readNative).not.toHaveBeenCalled();
+      expect(readNative).toHaveBeenCalledOnce();
       expect(open).not.toHaveBeenCalled();
       expect(readFile).not.toHaveBeenCalled();
     } finally {
-      names.resolve({ names: [] });
+      metadata.resolve();
       await restarted.close();
     }
   });
@@ -230,9 +360,6 @@ describe("resident Codex catalog SQLite durability", () => {
         homeId,
         state: openState(),
         readNative,
-        readNativeNames: async () => ({
-          names: native.map((thread) => ({ threadId: thread.id, name: thread.name ?? null })),
-        }),
         assertCurrent: () => {},
       });
     const first = createIndex();

@@ -36,7 +36,6 @@ import type { CodexCatalogState } from "./session-catalog-index-state.js";
 import { CodexCatalogIndex } from "./session-catalog-index.js";
 import {
   CatalogParamsError,
-  codexCatalogThreadName,
   isInteractiveThreadSource,
   readControlCursor,
   readPageParams,
@@ -432,18 +431,6 @@ export function createCodexSessionCatalogControl(params: {
                 : await projectCodexCatalogPage(bounded, projection);
             },
             !query.useStateDbOnly,
-          ),
-        readNativeNames: (query) =>
-          readNativePage(
-            { ...query, useStateDbOnly: true },
-            (response) => ({
-              names: response.data.flatMap((thread) => {
-                const name = codexCatalogThreadName(thread.name);
-                return name === undefined ? [] : [{ threadId: thread.id, name }];
-              }),
-              nextCursor: readControlCursor(response.nextCursor, "next response"),
-            }),
-            false,
           ),
       });
       indexes.set(homeId, index);

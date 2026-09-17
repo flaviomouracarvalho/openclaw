@@ -36,11 +36,13 @@ new rows; no list waits for native discovery.
 The index persists reconstructible display rows and file fingerprints through
 plugin state in the OpenClaw SQLite database. A restart loads this snapshot before
 serving the first list, then reconciles changed files in the background. A
-database-only native name walk recovers renames made while the Gateway was
-stopped and repeats every 30 seconds to discover renames from other Codex
-processes: name changes update neither rollout files nor activity timestamps.
-These coalesced background walks do not parse previews or repair rollouts, and
-catalog requests never wait for them.
+database-only native metadata walk recovers changes made while the Gateway was
+stopped and repeats every 30 seconds, including renames and the selected rollout
+path after a native revert. These coalesced background walks reuse previews for
+unchanged rows and do not ask Codex to scan or repair rollouts. Catalog requests
+never wait for them. A local database-only response can omit existing files when
+indexing is incomplete or unavailable, so omission alone does not remove a local
+row; verified file disappearance and explicit lifecycle events own removal.
 Loaded/active status has a separate memory-only lifecycle and resets to **Stored / activity unknown**
 after restart or an observed app-server connection closes, until fresh native
 events or metadata supply current status. Late responses from the closed
@@ -71,6 +73,8 @@ Interrupted updates and transient file-read failures remain eligible for the nex
 file size and modification time stay unchanged.
 Plain and compressed rollouts share the native logical `.jsonl` identity;
 the scanner prefers the plain file when both representations exist.
+Codex owns the selected rollout path. Retained files from an earlier revert
+cannot replace the current session's path or metadata during a filesystem scan.
 
 Each home retains at most 20,000 display rows, 20,000 live-status records,
 20,000 name records, and 20,000 scan fingerprints, matching the existing Codex

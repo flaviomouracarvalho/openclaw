@@ -54,7 +54,6 @@ it.each([false, true])(
         localSessionsRoot: path.join(home, "sessions"),
         state: openState(),
         readNative,
-        readNativeNames: async () => ({ names: [] }),
         assertCurrent: () => {},
       });
     const index = createIndex();

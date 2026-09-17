@@ -35,9 +35,6 @@ describe("resident Codex catalog", () => {
       assertCurrent: () => {},
       readNative: async () =>
         projectCodexCatalogPage({ data: native }, { sanitize: sanitizeTerminalText }),
-      readNativeNames: async () => ({
-        names: native.map((thread) => ({ threadId: thread.id, name: thread.name ?? null })),
-      }),
     });
     try {
       await index.initialize();
@@ -205,9 +202,6 @@ describe("resident Codex catalog", () => {
       homeId: "currency",
       localSessionsRoot: root,
       readNative,
-      readNativeNames: async () => ({
-        names: [{ threadId: existing.id, name: existing.name ?? null }],
-      }),
       assertCurrent: () => {},
     });
     try {
@@ -261,7 +255,6 @@ describe("resident Codex catalog", () => {
       homeId: "incomplete",
       localSessionsRoot: root,
       readNative: async () => ({ rows: [] }),
-      readNativeNames: async () => ({ names: [] }),
       assertCurrent: () => {},
     });
     try {

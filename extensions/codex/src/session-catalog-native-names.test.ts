@@ -30,7 +30,7 @@ it("reconciles saved and externally changed names through background DB-only pag
     delete: vi.fn(async () => false),
   };
   const preview = vi.fn(() => {
-    throw new Error("Names-only reconciliation must not inspect native previews");
+    throw new Error("Unchanged metadata reconciliation must not inspect native previews");
   });
   const renamed = "Offline title ".repeat(60).trim();
   const native = original.map((thread, index) =>

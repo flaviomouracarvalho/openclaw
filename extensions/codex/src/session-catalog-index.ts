@@ -6,11 +6,7 @@ import type { CodexThreadListParams, CodexThread } from "./app-server/protocol.j
 import { subscribeCodexCatalogEvents } from "./session-catalog-events.js";
 import { CodexCatalogIndexEvents } from "./session-catalog-index-events.js";
 import { CodexCatalogField, type CodexCatalogStatus } from "./session-catalog-index-field.js";
-import {
-  applyCodexCatalogName,
-  reconcileCodexCatalogNames,
-  type CodexCatalogNamesRead,
-} from "./session-catalog-index-names.js";
+import { applyCodexCatalogName } from "./session-catalog-index-names.js";
 import {
   compareCodexCatalogRows as order,
   CodexCatalogOrdering,
@@ -55,7 +51,6 @@ type IndexOptions = {
   localSessionsRoot?: string;
   state?: CodexCatalogState;
   readNative: CodexCatalogIndexRead;
-  readNativeNames: CodexCatalogNamesRead;
   assertCurrent: () => void;
   runBackground?: (run: () => Promise<void>) => Promise<void>;
 };
@@ -67,7 +62,7 @@ export class CodexCatalogIndex {
   private ordered: CodexCatalogIndexRow[] | undefined;
   private initializing: Promise<void> | undefined;
   private initialized = false;
-  private needsNativeNames = false;
+  private needsNativeRefresh = false;
   private restored = false;
   private restoring: Promise<void> | undefined;
   private background: NodeJS.Immediate | undefined;
@@ -223,7 +218,7 @@ export class CodexCatalogIndex {
     this.assertCurrent();
     clearImmediate(this.background);
     this.background = undefined;
-    if (this.initialized && !this.needsNativeNames) {
+    if (this.initialized && !this.needsNativeRefresh) {
       return;
     }
     if (!this.initializing) {
@@ -237,10 +232,10 @@ export class CodexCatalogIndex {
             observedRevision = await this.observe((isCurrent) => this.hydrate(isCurrent));
           } while (observedRevision !== this.sourceRevision);
         }
-        if (this.needsNativeNames) {
+        if (this.needsNativeRefresh) {
           await this.reconcile();
           await this.reconcileNative();
-          this.needsNativeNames = false;
+          this.needsNativeRefresh = false;
         }
         this.initialized = true;
         this.failure = undefined;
@@ -298,7 +293,7 @@ export class CodexCatalogIndex {
       this.restored = true;
       if (complete && validSnapshot && this.options.localSessionsRoot) {
         this.initialized = true;
-        this.needsNativeNames = true;
+        this.needsNativeRefresh = true;
         this.startCurrency();
       }
     });
@@ -307,7 +302,7 @@ export class CodexCatalogIndex {
 
   private scheduleHydration(): void {
     if (
-      (this.initialized && !this.needsNativeNames) ||
+      (this.initialized && !this.needsNativeRefresh) ||
       this.initializing ||
       this.background ||
       this.closed
@@ -357,25 +352,9 @@ export class CodexCatalogIndex {
       return this.initializing;
     }
     if (!this.reconcilingNative) {
-      const revision = this.names.capture();
-      const refresh = this.options.localSessionsRoot
-        ? reconcileCodexCatalogNames({
-            read: this.options.readNativeNames,
-            assertCurrent: () => this.assertCurrent(),
-            publish: (threadId, name) => {
-              const row = this.rows.get(threadId);
-              if (
-                row &&
-                this.names.observe(threadId, name, revision) &&
-                row.page.sessions[0]?.name !== name
-              ) {
-                this.put(row);
-              }
-            },
-          })
-        : this.observe(async (isCurrent) => {
-            await this.hydrate(isCurrent, true);
-          });
+      const refresh = this.observe(async (isCurrent) => {
+        await this.hydrate(isCurrent, true);
+      });
       this.reconcilingNative = refresh.finally(() => {
         this.reconcilingNative = undefined;
       });
@@ -388,9 +367,10 @@ export class CodexCatalogIndex {
     useStateDbOnly = false,
   ): Promise<number> {
     this.assertCurrent();
-    const files = this.options.localSessionsRoot
-      ? (await scanCodexCatalogRollouts(this.options.localSessionsRoot, new Set())).files
-      : new Map<string, CodexCatalogRolloutFingerprint>();
+    const files =
+      this.options.localSessionsRoot && !useStateDbOnly
+        ? (await scanCodexCatalogRollouts(this.options.localSessionsRoot, new Set())).files
+        : new Map<string, CodexCatalogRolloutFingerprint>();
     let cursor: string | undefined;
     let observedRevision = this.sourceRevision;
     let firstPage = true;
@@ -435,10 +415,16 @@ export class CodexCatalogIndex {
           continue;
         }
         const logicalPath = row.rolloutPath && codexCatalogRolloutLogicalPath(row.rolloutPath);
-        const fingerprint = logicalPath
-          ? (files.get(logicalPath) ?? files.get(`${logicalPath}.zst`))
-          : undefined;
         const previous = this.rows.get(row.threadId);
+        const fingerprint = logicalPath
+          ? (files.get(logicalPath) ??
+            files.get(`${logicalPath}.zst`) ??
+            (useStateDbOnly &&
+            previous?.rolloutPath &&
+            codexCatalogRolloutLogicalPath(previous.rolloutPath) === logicalPath
+              ? previous.fingerprint
+              : undefined))
+          : undefined;
         this.markMutation(row.threadId);
         this.put({
           ...row,
@@ -455,9 +441,13 @@ export class CodexCatalogIndex {
       }
       await nextTurn();
     } while (cursor);
-    for (const [id, row] of remaining) {
-      if (isCurrent(id) && this.rows.get(id) === row) {
-        this.remove(id);
+    // DB-only listing can omit local files when indexing is incomplete or the
+    // database is unavailable. Verified file absence and events own their removal.
+    if (!useStateDbOnly || !this.options.localSessionsRoot) {
+      for (const [id, row] of remaining) {
+        if (isCurrent(id) && this.rows.get(id) === row) {
+          this.remove(id);
+        }
       }
     }
     await this.persistence.finishHydration();
@@ -554,6 +544,16 @@ export class CodexCatalogIndex {
         continue;
       }
       const existing = this.rows.get(thread.id);
+      if (
+        existing?.rolloutPath &&
+        codexCatalogRolloutLogicalPath(existing.rolloutPath) !==
+          codexCatalogRolloutLogicalPath(file)
+      ) {
+        // Reverts retain older immutable files with the same thread id. Only
+        // native metadata may change which rollout the catalog considers current.
+        observed.set(file, fingerprint);
+        continue;
+      }
       if (!existing && !thread.preview) {
         observed.set(file, fingerprint);
         continue;

@@ -54,7 +54,6 @@ describe("resident Codex catalog recovery", () => {
       homeId: "remote-restart",
       state,
       readNative,
-      readNativeNames: async () => ({ names: [] }),
       assertCurrent: () => {},
     });
     try {
@@ -94,7 +93,6 @@ describe("resident Codex catalog recovery", () => {
         homeId: "external-archive",
         localSessionsRoot: root,
         readNative,
-        readNativeNames: async () => ({ names: [] }),
         assertCurrent: () => {},
       });
       try {
@@ -139,7 +137,6 @@ describe("resident Codex catalog recovery", () => {
       homeId: "compressed-initial",
       localSessionsRoot: root,
       readNative,
-      readNativeNames: async () => ({ names: [] }),
       assertCurrent: () => {},
     });
     try {
@@ -179,7 +176,6 @@ describe("resident Codex catalog recovery", () => {
       homeId,
       localSessionsRoot: root,
       readNative,
-      readNativeNames: async () => ({ names: [] }),
       assertCurrent: () => {},
     });
     const harness = createClientHarness();
@@ -244,7 +240,6 @@ describe("resident Codex catalog recovery", () => {
       homeId: "read-recovery",
       localSessionsRoot: root,
       readNative,
-      readNativeNames: async () => ({ names: [] }),
       assertCurrent: () => {},
     });
     try {
@@ -301,7 +296,6 @@ describe("resident Codex catalog recovery", () => {
         homeId: await codexCatalogResidentHomeKey({ startOptions }),
         localSessionsRoot: root,
         readNative,
-        readNativeNames: async () => ({ names: [] }),
         assertCurrent: () => {},
       });
       const harness = createClientHarness();
@@ -392,7 +386,6 @@ describe("resident Codex catalog recovery", () => {
         homeId: `missing-new-${layout}`,
         localSessionsRoot: root,
         readNative,
-        readNativeNames: async () => ({ names: [] }),
         assertCurrent: () => {},
       });
       try {
@@ -427,7 +420,6 @@ describe("resident Codex catalog recovery", () => {
       homeId: "bounded-preview",
       localSessionsRoot: root,
       readNative,
-      readNativeNames: async () => ({ names: [] }),
       assertCurrent: () => {},
     });
     try {

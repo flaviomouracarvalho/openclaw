@@ -58,9 +58,6 @@ async function fixture(
   const index = new CodexCatalogIndex({
     homeId,
     readNative,
-    readNativeNames: async () => ({
-      names: threads.map((value) => ({ threadId: value.id, name: value.name ?? null })),
-    }),
     state: options.state,
     ...(home ? { localSessionsRoot: path.join(home, "sessions") } : {}),
     assertCurrent: () => {},
