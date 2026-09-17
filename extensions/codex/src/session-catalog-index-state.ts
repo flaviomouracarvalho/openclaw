@@ -3,6 +3,7 @@ import { setImmediate as nextTurn } from "node:timers/promises";
 import type { PluginStateKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { retainCodexCatalogRow } from "./session-catalog-index-order.js";
+import type { CodexCatalogIndexRow } from "./session-catalog-index-row.js";
 import {
   CODEX_CATALOG_MAX_ROWS,
   CODEX_CATALOG_MAX_STATE_KEY_BYTES,
@@ -12,20 +13,6 @@ import { MAX_CWD_LENGTH, parseCatalogPage } from "./session-catalog-parsing.js";
 import type { CodexSessionCatalogPage } from "./session-catalog-types.js";
 
 export const CODEX_CATALOG_STATE_NAMESPACE = "session-catalog-resident";
-export type CodexCatalogRolloutFingerprint = { mtimeMs: number; size: number };
-export type CodexCatalogIndexRow = {
-  threadId: string;
-  updatedAt: number | null;
-  recencyAt: number | null;
-  archived: boolean;
-  nativeMetadata: boolean;
-  preview?: string;
-  /** Stable tie position, initially assigned in native order. */
-  sourceOrder?: number;
-  rolloutPath?: string;
-  fingerprint?: CodexCatalogRolloutFingerprint;
-  page: CodexSessionCatalogPage;
-};
 export type StoredCodexCatalogEntry =
   | { version: 1; kind: "complete" }
   | { version: 1; kind: "row"; row: CodexCatalogIndexRow };

@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
+import type { CodexCatalogIndexRow } from "./session-catalog-index-row.js";
 import {
   CodexCatalogPersistence,
-  type CodexCatalogIndexRow,
   type CodexCatalogState,
   type StoredCodexCatalogEntry,
 } from "./session-catalog-index-state.js";

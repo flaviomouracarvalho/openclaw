@@ -1,5 +1,6 @@
 import type { CodexThreadListParams } from "./app-server/protocol.js";
-import type { CodexCatalogIndexRow, CodexCatalogState } from "./session-catalog-index-state.js";
+import type { CodexCatalogIndexRow } from "./session-catalog-index-row.js";
+import type { CodexCatalogState } from "./session-catalog-index-state.js";
 
 type CodexCatalogIndexRead = (
   params: CodexThreadListParams,

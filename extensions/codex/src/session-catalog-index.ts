@@ -19,10 +19,12 @@ import {
   type CodexCatalogOrderKey,
 } from "./session-catalog-index-order.js";
 import { prepareCodexCatalogQuery } from "./session-catalog-index-query.js";
+import type {
+  CodexCatalogIndexRow,
+  CodexCatalogRolloutFingerprint,
+} from "./session-catalog-index-row.js";
 import {
   codexCatalogMetadataPage,
-  type CodexCatalogIndexRow,
-  type CodexCatalogRolloutFingerprint,
   CodexCatalogPersistence,
 } from "./session-catalog-index-state.js";
 import { CODEX_CATALOG_MAX_ROWS } from "./session-catalog-limits.js";

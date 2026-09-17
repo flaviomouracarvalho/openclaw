@@ -1,4 +1,4 @@
-import type { CodexCatalogIndexRow } from "./session-catalog-index-state.js";
+import type { CodexCatalogIndexRow } from "./session-catalog-index-row.js";
 import { CODEX_CATALOG_MAX_ROWS } from "./session-catalog-limits.js";
 
 export type CodexCatalogOrderKey = Pick<

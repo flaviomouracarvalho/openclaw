@@ -1,4 +1,4 @@
-import type { CodexCatalogIndexRow } from "./session-catalog-index-state.js";
+import type { CodexCatalogIndexRow } from "./session-catalog-index-row.js";
 
 export function applyCodexCatalogName(
   row: CodexCatalogIndexRow,

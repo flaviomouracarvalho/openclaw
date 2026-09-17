@@ -5,7 +5,7 @@ import type {
   CodexThreadStatus,
 } from "./app-server/protocol.js";
 import type { CodexCatalogStatus } from "./session-catalog-index-field.js";
-import type { CodexCatalogIndexRow } from "./session-catalog-index-state.js";
+import type { CodexCatalogIndexRow } from "./session-catalog-index-row.js";
 import { CODEX_CATALOG_MAX_ROWS } from "./session-catalog-limits.js";
 import {
   boundedCatalogString,

@@ -6,7 +6,7 @@ import {
   compareCodexCatalogRows,
   type CodexCatalogOrderKey,
 } from "./session-catalog-index-order.js";
-import type { CodexCatalogIndexRow } from "./session-catalog-index-state.js";
+import type { CodexCatalogIndexRow } from "./session-catalog-index-row.js";
 import {
   CatalogParamsError,
   normalizeLimit,

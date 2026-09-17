@@ -5,7 +5,8 @@ import {
   codexCatalogResidentHomeKey,
   observeCodexCatalogClient,
 } from "./session-catalog-events.js";
-import type { CodexCatalogIndexRow, CodexCatalogState } from "./session-catalog-index-state.js";
+import type { CodexCatalogIndexRow } from "./session-catalog-index-row.js";
+import type { CodexCatalogState } from "./session-catalog-index-state.js";
 import { CodexCatalogIndex } from "./session-catalog-index.js";
 
 function row(threadId: string): CodexCatalogIndexRow {

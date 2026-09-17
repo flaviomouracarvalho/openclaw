@@ -6,7 +6,7 @@ import { root as openSafeRoot } from "openclaw/plugin-sdk/file-access-runtime";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { sanitizeTerminalText } from "openclaw/plugin-sdk/text-chunking";
 import type { CodexSessionSource, CodexThread } from "./app-server/protocol.js";
-import type { CodexCatalogRolloutFingerprint } from "./session-catalog-index-state.js";
+import type { CodexCatalogRolloutFingerprint } from "./session-catalog-index-row.js";
 import { CODEX_CATALOG_MAX_ROWS, detachCodexCatalogString } from "./session-catalog-limits.js";
 import {
   boundedCatalogString,

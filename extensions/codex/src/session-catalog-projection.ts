@@ -7,7 +7,7 @@ import { codexCatalogRowRecency } from "./session-catalog-index-order.js";
 import type {
   CodexCatalogIndexRow,
   CodexCatalogRolloutFingerprint,
-} from "./session-catalog-index-state.js";
+} from "./session-catalog-index-row.js";
 import { CODEX_CATALOG_MAX_ROWS } from "./session-catalog-limits.js";
 import { projectCodexCatalogNativeThread } from "./session-catalog-native-projection.js";
 import {

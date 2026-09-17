@@ -2,11 +2,8 @@ import { setTimeout as delay } from "node:timers/promises";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { describe, expect, it, vi } from "vitest";
 import type { CodexThreadListParams } from "./app-server/protocol.js";
-import type {
-  CodexCatalogIndexRow,
-  CodexCatalogState,
-  StoredCodexCatalogEntry,
-} from "./session-catalog-index-state.js";
+import type { CodexCatalogIndexRow } from "./session-catalog-index-row.js";
+import type { CodexCatalogState, StoredCodexCatalogEntry } from "./session-catalog-index-state.js";
 import { CodexCatalogIndex } from "./session-catalog-index.js";
 
 function row(threadId: string, cwd = "/workspace"): CodexCatalogIndexRow {
