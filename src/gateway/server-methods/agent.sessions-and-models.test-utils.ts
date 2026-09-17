@@ -31,6 +31,10 @@ import { createAgentTurnIo } from "../agent-turn/io.js";
 import { bindInProcessSubagentResume } from "../in-process-subagent-resume.js";
 import { bindParentSubagentResume } from "../session-subagent-resume.js";
 import { registerPluginSubagentRunFromGateway } from "./agent-task-tracking.js";
+import {
+  mockSpawnedChildSessionEntry,
+  spyDetachedCreateRunningTaskRun,
+} from "./agent-task-tracking.test-helpers.js";
 import { registerAgentTaskCancellationTests } from "./agent.task-cancellation.test-utils.js";
 import {
   applyGatewaySubagentRegistryTestDeps,
@@ -58,36 +62,6 @@ import {
 } from "./agent.test-harness.js";
 
 const mocks = getAgentTestMocks();
-
-// Shared by every spawn control plane whose child turn reaches the gateway as a
-// plain `agent` run: ACP manual spawns, plugin subagents, and native subagents.
-function mockSpawnedChildSessionEntry(childSessionKey: string, storePath = "/tmp/sessions.json") {
-  mocks.userTurnStorePath = storePath;
-  mocks.loadSessionEntry.mockReturnValue({
-    cfg: {},
-    storePath,
-    entry: { sessionId: "spawned-child-session", updatedAt: Date.now() },
-    canonicalKey: childSessionKey,
-  });
-  mocks.updateSessionStore.mockResolvedValue(undefined);
-  mocks.agentCommand.mockResolvedValue({
-    payloads: [{ text: "ok" }],
-    meta: { durationMs: 100 },
-  });
-}
-
-function spyDetachedCreateRunningTaskRun() {
-  const defaultRuntime = getDetachedTaskLifecycleRuntime();
-  const createRunningTaskRunSpy = vi.fn(
-    (...args: Parameters<typeof defaultRuntime.createRunningTaskRun>) =>
-      defaultRuntime.createRunningTaskRun(...args),
-  );
-  setDetachedTaskLifecycleRuntime({
-    ...defaultRuntime,
-    createRunningTaskRun: createRunningTaskRunSpy,
-  });
-  return createRunningTaskRunSpy;
-}
 
 describe("gateway agent handler", () => {
   afterEach(describe0AfterEach0);
@@ -632,7 +606,14 @@ describe("gateway agent handler", () => {
                 sourceTool: "subagent_settle",
               },
             },
-            { context, reqId: nextRunId, client: backendGatewayClient(), respond: wakeRespond },
+            {
+              context,
+              reqId: nextRunId,
+              client: backendGatewayClient(),
+              respond: wakeRespond,
+              // This wake awaits SQLite; keep the outer lifecycle wait on real timers.
+              flushDispatch: false,
+            },
           );
           return true;
         },
@@ -3246,7 +3227,8 @@ describe("gateway agent handler", () => {
     it("keeps a host-owned subagent run to its pre-registered task row", async () => {
       await withTestDir({ prefix: "openclaw-gateway-subagent-owner-" }, async (root) => {
         useTestStateDir(root);
-        resetAgentTaskRegistryForTests();
+        // The Gateway worker must read the same durable task that the host registered.
+        resetTaskRegistryForTests({ persist: false });
         const childSessionKey = "agent:main:subagent:owned";
         const runId = "host-owned-subagent-run";
         mockSpawnedChildSessionEntry(childSessionKey);
