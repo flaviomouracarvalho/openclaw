@@ -16,6 +16,7 @@ import {
   legacyAcpMigrationBindingMatches,
   recordLegacyAcpMigrationCompletion,
 } from "../../infra/legacy-acp-migration-source.js";
+import { sessionChanges } from "../../sessions/session-row-changes.js";
 import { withExistingOpenClawStateDatabaseReadOnly } from "../../state/openclaw-state-db-readonly.js";
 import {
   type OpenClawStateDatabaseOptions,
@@ -33,6 +34,7 @@ import {
   resolveReadableAcpSessionRow,
   selectAcpSessionRow,
   selectAcpSessionRowForStoreEntry,
+  upsertAcpSessionMetaRow,
 } from "./session-meta-keys.js";
 import { clearLegacyEmbeddedAcpMetadata } from "./session-meta-legacy-cleanup.js";
 import { readAcpSessionMetaForEntry, rowToAcpSessionMeta } from "./session-meta-readonly.js";
@@ -214,6 +216,7 @@ export function writeAcpSessionMetaForMigration(params: {
   runOpenClawStateWriteTransaction(
     (database) => {
       upsertAcpSessionMetaRow(database.db, row);
+      sessionChanges.emit({ all: true, scope: "acp" }, database.db);
     },
     { database: params.database, env: params.env, path: params.databasePath },
   );
@@ -289,36 +292,12 @@ export function repairAcpSessionMetaKeyForMigration(params: {
           .deleteFrom("acp_sessions")
           .where("session_key", "=", row.session_key),
       );
+      sessionChanges.emit({ all: true, scope: "acp" }, database.db);
       repaired = true;
     },
     { env: params.env, path: params.databasePath },
   );
   return repaired;
-}
-
-function upsertAcpSessionMetaRow(db: DatabaseSync, row: Insertable<AcpSessionsTable>): void {
-  executeSqliteQuerySync(
-    db,
-    getAcpSessionKysely(db)
-      .insertInto("acp_sessions")
-      .values(row)
-      .onConflict((conflict) =>
-        conflict.column("session_key").doUpdateSet({
-          session_id: (eb) => eb.ref("excluded.session_id"),
-          backend: (eb) => eb.ref("excluded.backend"),
-          agent: (eb) => eb.ref("excluded.agent"),
-          runtime_session_name: (eb) => eb.ref("excluded.runtime_session_name"),
-          identity_json: (eb) => eb.ref("excluded.identity_json"),
-          mode: (eb) => eb.ref("excluded.mode"),
-          runtime_options_json: (eb) => eb.ref("excluded.runtime_options_json"),
-          cwd: (eb) => eb.ref("excluded.cwd"),
-          state: (eb) => eb.ref("excluded.state"),
-          last_activity_at: (eb) => eb.ref("excluded.last_activity_at"),
-          last_error: (eb) => eb.ref("excluded.last_error"),
-          updated_at: (eb) => eb.ref("excluded.updated_at"),
-        }),
-      ),
-  );
 }
 
 export function readAcpSessionEntry(params: {
@@ -571,6 +550,10 @@ export async function upsertAcpSessionMeta(params: {
               .where("session_key", "=", key),
           );
         }
+        sessionChanges.emit(
+          { agentId: storeEntry.agentId, sessionKey: patched?.sessionKey ?? storageSessionKey },
+          database.db,
+        );
       },
       { env: params.env, path: params.databasePath },
     );
@@ -663,6 +646,10 @@ export async function upsertAcpSessionMeta(params: {
           );
         }
       }
+      sessionChanges.emit(
+        { agentId: storeEntry.agentId, sessionKey: persisted.sessionKey },
+        database.db,
+      );
     },
     { env: params.env, path: params.databasePath },
   );

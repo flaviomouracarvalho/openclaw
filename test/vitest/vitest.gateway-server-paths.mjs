@@ -31,8 +31,6 @@ export const gatewayDatabaseWorkerTestFiles = [
   "src/gateway/server-methods/sessions-create-thinking-claim.test.ts",
   "src/gateway/server-methods/sessions-create-worktree-base.test.ts",
   "src/gateway/server-methods/sessions-describe-worker.test.ts",
-  "src/gateway/server-methods/sessions-list-cache.live-reuse.test.ts",
-  "src/gateway/server-methods/sessions-list-cache.visibility.test.ts",
   "src/gateway/server-methods/sessions-list-persisted-worker.test.ts",
   "src/gateway/server-methods/sessions-read-active.test.ts",
   "src/gateway/server-methods/sessions-read-async.test.ts",
@@ -52,7 +50,9 @@ export const gatewayDatabaseWorkerTestFiles = [
   "src/gateway/session-repository-publication-handoff.test.ts",
   "src/gateway/session-swarm-summary.test.ts",
   "src/gateway/session-utils-store-lookup.test.ts",
+  "src/gateway/session-utils.agent-models.test.ts",
   "src/gateway/session-utils.subagent.test.ts",
+  "src/gateway/session-utils.test.ts",
   "src/gateway/setup-inference.first-signin.integration.test.ts",
   "src/gateway/tool-resolution.cron-capture.test.ts",
   "src/gateway/worker-environments/provider-crabbox-runtime-preflight.test.ts",
@@ -98,6 +98,7 @@ export const gatewayServerIsolatedTestFiles = [
   "src/gateway/server.placement-abandonment.lifecycle.test.ts",
   "src/gateway/server.placement-abandonment.test.ts",
   "src/gateway/server.sessions.compaction-read-errors.test.ts",
+  "src/gateway/server.xai-fallback.test.ts",
 ];
 
 export const gatewayServerExcludedTestFiles = [
