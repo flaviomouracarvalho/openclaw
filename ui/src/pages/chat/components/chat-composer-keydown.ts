@@ -164,6 +164,9 @@ export function createComposerKeyDownHandler({
       }
       event.preventDefault();
       commitDraft(target.value);
+      if (goalComposer.activateDraft(target.value, true)) {
+        return;
+      }
       const followUpModeOverride =
         (event.metaKey || event.ctrlKey) && !event.altKey ? alternateFollowUpMode : undefined;
       props.onSend(followUpModeOverride, event);

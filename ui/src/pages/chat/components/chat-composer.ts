@@ -199,7 +199,7 @@ export function renderChatComposer(props: ChatComposerProps) {
     commitDraft: skillMenuHost.commitDraft,
     getTextarea: () => state.composerTextarea,
     resolveArgOptions: (command) => resolveChatSlashCommandArgOptions(command, props),
-    runCommand: () => props.onSend(),
+    runCommand: goalComposer.submitCommand,
     canRunInlineCommand: () => state.slashCommandDispatchConnected && Boolean(props.onSlashCommand),
     runInlineCommand: props.connected ? props.onSlashCommand : undefined,
     refreshCommands: props.onSlashIntent,
@@ -368,6 +368,7 @@ export function renderChatComposer(props: ChatComposerProps) {
         : undefined,
     );
     state.mentionInput = undefined;
+    goalComposer.activateDraft(target.value);
     if (!goalComposer.active) {
       updateSlashMenu(target.value, state, slashMenuHost, requestUpdate);
       updateSkillMenu(target.value, target.selectionStart, state, skillMenuHost, requestUpdate);
@@ -473,6 +474,9 @@ export function renderChatComposer(props: ChatComposerProps) {
     state.composingDraft = null;
     commitComposerDraft(props, draft);
     props.onTypingChange?.(false);
+    if (goalComposer.activateDraft(draft, true)) {
+      return;
+    }
     if (goalComposer.active) {
       void goalComposer.submit(submissionAction);
       return;

@@ -311,6 +311,9 @@ function tabCompleteSlashCommand(
   host: SlashMenuHost,
   requestUpdate: () => void,
 ): void {
+  if (host.activateComposerMode?.(cmd)) {
+    return;
+  }
   const inlineReplacement = cmd.source === "skill" ? `$${cmd.name}` : `/${cmd.name}`;
   if (beginInlineSlashArguments(cmd, state, host, requestUpdate)) {
     return;
@@ -551,8 +554,8 @@ export function getActiveSlashMenuOptionLabel(state: SlashMenuState): string {
   return `${command} ${getSlashCommandDescription(cmd)}`;
 }
 
-function renderSlashIcon(name: string) {
-  return icons[name as IconName] ?? icons.terminal;
+function renderSlashIcon(name?: string) {
+  return icons[(name ?? "terminal") as IconName] ?? icons.terminal;
 }
 
 function renderMatchedName(name: string, query: string): TemplateResult {
@@ -585,17 +588,13 @@ function renderSlashCommandOption(params: {
       }}
     >
       <span class="slash-menu-icon"
-        >${cmd.source === "skill"
-          ? icons.pencilSparkles
-          : cmd.icon
-            ? renderSlashIcon(cmd.icon)
-            : icons.terminal}</span
+        >${cmd.source === "skill" ? icons.pencilSparkles : renderSlashIcon(cmd.icon)}</span
       >
       <span class="slash-menu-copy">
         <span class="slash-menu-name"
-          >/${renderMatchedName(cmd.name, query)}${cmd.args
-            ? html`<span class="slash-menu-args"> ${cmd.args}</span>`
-            : nothing}</span
+          >/${renderMatchedName(cmd.name, query)}${
+            cmd.args ? html`<span class="slash-menu-args"> ${cmd.args}</span>` : nothing
+          }</span
         >
         <span class="slash-menu-desc">${getSlashCommandDescription(cmd)}</span>
       </span>
@@ -639,9 +638,9 @@ export function renderSlashMenu(
               (arg, i) => html`
                 <div
                   id=${getSlashArgOptionId(host.paneId, state.slashMenuCommand?.name ?? "", arg)}
-                  class="slash-menu-item ${i === state.slashMenuIndex
-                    ? "slash-menu-item--active"
-                    : ""}"
+                  class="slash-menu-item ${
+                    i === state.slashMenuIndex ? "slash-menu-item--active" : ""
+                  }"
                   role="option"
                   aria-selected=${i === state.slashMenuIndex}
                   @click=${() => selectSlashArg(arg, state, host, requestUpdate, true)}
@@ -651,9 +650,7 @@ export function renderSlashMenu(
                   }}
                 >
                   <span class="slash-menu-icon"
-                    >${state.slashMenuCommand?.icon
-                      ? renderSlashIcon(state.slashMenuCommand.icon)
-                      : icons.terminal}</span
+                    >${renderSlashIcon(state.slashMenuCommand?.icon)}</span
                   >
                   <span class="slash-menu-copy">
                     <span class="slash-menu-name">${arg}</span>
@@ -710,21 +707,23 @@ export function renderSlashMenu(
             )}
           </div>`,
         )}
-        ${skills.length > 0
-          ? html`<div class="slash-menu-group slash-menu-group--skills">
-              <div class="slash-menu-group__label">${t("chat.skills.label")}</div>
-              ${skills.map((cmd, index) =>
-                renderSlashCommandOption({
-                  cmd,
-                  index: commands.length + index,
-                  query,
-                  requestUpdate,
-                  host,
-                  state,
-                }),
-              )}
-            </div>`
-          : nothing}
+        ${
+          skills.length > 0
+            ? html`<div class="slash-menu-group slash-menu-group--skills">
+                <div class="slash-menu-group__label">${t("chat.skills.label")}</div>
+                ${skills.map((cmd, index) =>
+                  renderSlashCommandOption({
+                    cmd,
+                    index: commands.length + index,
+                    query,
+                    requestUpdate,
+                    host,
+                    state,
+                  }),
+                )}
+              </div>`
+            : nothing
+        }
       </div>
     </div>
   `;

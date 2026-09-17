@@ -4479,20 +4479,56 @@ describe("chat slash menu accessibility", () => {
     expect(onSlashIntent).toHaveBeenCalledTimes(1);
   });
 
-  it.each(["keyboard", "pointer"])(
-    "collects a literal Goal objective after %s selection and retains a rejected draft",
+  it.each([
+    "keyboard",
+    "pointer",
+    "tab",
+    "start",
+    "set",
+    "create",
+    "send",
+    "dismissed-enter",
+    "argument-keyboard",
+    "argument-pointer",
+  ])(
+    "collects a literal Goal objective after %s entry and retains a rejected draft",
     async (selection) => {
       const onGoalSubmit = vi.fn(async () => false);
       const onSend = vi.fn();
-      const { container } = createReactiveDraftHarness({ onGoalSubmit, onSend });
+      const { container } = createReactiveDraftHarness({
+        onGoalSubmit,
+        onSend,
+        onSlashCommand: vi.fn(),
+      });
       inputDraftAtEnd(container, "/goal");
-      if (selection === "keyboard") {
-        keydownComposer(container, "Enter");
-      } else {
+      if (selection === "keyboard" || selection === "tab") {
+        keydownComposer(container, selection === "tab" ? "Tab" : "Enter");
+      } else if (selection === "pointer") {
         container.querySelector<HTMLElement>('.slash-menu-item[role="option"]')?.click();
+      } else if (selection === "send" || selection === "dismissed-enter") {
+        keydownComposer(container, "Escape");
+        if (selection === "send") {
+          container.querySelector<HTMLButtonElement>('button[aria-label="Send message"]')?.click();
+        } else {
+          keydownComposer(container, "Enter");
+        }
+      } else if (selection.startsWith("argument-")) {
+        inputDraftAtEnd(container, "/goal st");
+        keydownComposer(container, "ArrowDown");
+        if (selection === "argument-keyboard") {
+          keydownComposer(container, "Enter");
+        } else {
+          container.querySelector<HTMLElement>('.slash-menu-item[aria-selected="true"]')?.click();
+        }
+      } else {
+        inputDraftAtEnd(container, `/goal ${selection} `);
       }
       expect(container.querySelector(".agent-chat__goal-mode")).not.toBeNull();
       expect(container.querySelector(".slash-menu")).toBeNull();
+      expect(onGoalSubmit).not.toHaveBeenCalled();
+      expect(onSend).not.toHaveBeenCalled();
+      expect(getComposerTextarea(container).value).toBe("");
+      keydownComposer(container, "Enter");
       expect(onGoalSubmit).not.toHaveBeenCalled();
       expect(onSend).not.toHaveBeenCalled();
       const objective = "  /stop the flaky tests\nthen preserve   every space  ";
@@ -4515,18 +4551,43 @@ describe("chat slash menu accessibility", () => {
     },
   );
 
-  it("keeps Tab completion textual and preserves explicit goal command submission", () => {
-    const onGoalSubmit = vi.fn(async () => true);
-    const onSend = vi.fn();
-    const { container } = createReactiveDraftHarness({ onGoalSubmit, onSend });
-    inputDraftAtEnd(container, "/goal");
-    keydownComposer(container, "Tab");
-    expect(container.querySelector(".agent-chat__goal-mode")).toBeNull();
-    inputDraftAtEnd(container, "/goal start Fix the tests");
-    keydownComposer(container, "Enter");
-    expect(onSend).toHaveBeenCalledOnce();
-    expect(onGoalSubmit).not.toHaveBeenCalled();
+  it.each(["/goal start Fix the tests", "/goal status", "/goal pause waiting on CI"])(
+    "preserves explicit goal command submission: %s",
+    (command) => {
+      const onGoalSubmit = vi.fn(async () => true);
+      const onSend = vi.fn();
+      const { container } = createReactiveDraftHarness({ onGoalSubmit, onSend });
+      inputDraftAtEnd(container, command);
+      expect(container.querySelector(".agent-chat__goal-mode")).toBeNull();
+      keydownComposer(container, "Escape");
+      keydownComposer(container, "Enter");
+      expect(onSend).toHaveBeenCalledOnce();
+      expect(onGoalSubmit).not.toHaveBeenCalled();
+    },
+  );
+
+  it("does not consume a creation-action prefix while an objective is still being typed", () => {
+    const { container } = createReactiveDraftHarness({ onGoalSubmit: vi.fn(async () => true) });
+    for (const draft of ["/goal start", "/goal starting", "/goal starting the rollout"]) {
+      inputDraftAtEnd(container, draft);
+      expect(container.querySelector(".agent-chat__goal-mode")).toBeNull();
+      expect(getComposerTextarea(container).value).toBe(draft);
+    }
   });
+
+  it.each(["/goal start ", "Discuss /goal start "])(
+    "preserves %s when it is not a supported standalone Goal entry",
+    (draft) => {
+      const onSend = vi.fn();
+      const { container } = createReactiveDraftHarness({
+        onSend,
+        ...(draft.startsWith("Discuss") ? { onGoalSubmit: vi.fn(async () => true) } : {}),
+      });
+      inputDraftAtEnd(container, draft);
+      expect(container.querySelector(".agent-chat__goal-mode")).toBeNull();
+      expect(getComposerTextarea(container).value).toBe(draft);
+    },
+  );
 
   it("keeps a new session draft intact when an earlier Goal edit finishes", async () => {
     const pending = createDeferred<boolean>();
