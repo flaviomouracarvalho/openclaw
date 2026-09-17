@@ -28,7 +28,7 @@ export function prepareCodexCatalogQuery(homeId: string, params: CodexSessionCat
     .update(JSON.stringify([homeId, cwd ?? "", search ?? ""]))
     .digest("hex")
     .slice(0, 16);
-  let anchor: { time: number; id: string; sourceOrder: number; backwards: boolean } | undefined;
+  let anchor: (CodexCatalogOrderKey & { backwards: boolean }) | undefined;
   if (encoded) {
     let value: unknown;
     try {
@@ -50,7 +50,13 @@ export function prepareCodexCatalogQuery(homeId: string, params: CodexSessionCat
     ) {
       throw new CatalogParamsError("invalid Codex resident catalog cursor");
     }
-    anchor = { time: value[1], id: value[2], sourceOrder: value[3], backwards: value[4] };
+    anchor = {
+      updatedAt: value[1],
+      recencyAt: value[1],
+      threadId: value[2],
+      sourceOrder: value[3],
+      backwards: value[4],
+    };
   }
   const cursor = (row: CodexCatalogOrderKey, backwards: boolean) =>
     Buffer.from(
@@ -76,12 +82,7 @@ export function prepareCodexCatalogQuery(homeId: string, params: CodexSessionCat
       !complete &&
       frontier &&
       anchor?.backwards &&
-      compareCodexCatalogRows(frontier, {
-        threadId: anchor.id,
-        updatedAt: anchor.time,
-        recencyAt: anchor.time,
-        sourceOrder: anchor.sourceOrder,
-      }) < 0
+      compareCodexCatalogRows(frontier, anchor) < 0
     ) {
       return undefined;
     }
@@ -90,6 +91,7 @@ export function prepareCodexCatalogQuery(homeId: string, params: CodexSessionCat
       return (
         !row.archived &&
         session &&
+        (!anchor?.backwards || row.threadId !== anchor.threadId) &&
         (complete || !frontier || compareCodexCatalogRows(row, frontier) <= 0) &&
         (!cwd || (liveSettings.get(row.threadId)?.cwd ?? session.cwd) === cwd) &&
         (!search || (session.name ?? session.fallbackName)?.toLocaleLowerCase().includes(search))
@@ -98,15 +100,9 @@ export function prepareCodexCatalogQuery(homeId: string, params: CodexSessionCat
     let start = 0;
     let end: number | undefined;
     const after = (row: CodexCatalogOrderKey) =>
-      !anchor ||
-      codexCatalogRowRecency(row) < anchor.time ||
-      (codexCatalogRowRecency(row) === anchor.time &&
-        ((row.sourceOrder ?? 0) > anchor.sourceOrder ||
-          ((row.sourceOrder ?? 0) === anchor.sourceOrder && row.threadId < anchor.id)));
+      !anchor || compareCodexCatalogRows(row, anchor) > 0;
     if (anchor) {
-      const at = selected.findIndex(
-        (row) => after(row) || (anchor.backwards && row.threadId === anchor.id),
-      );
+      const at = selected.findIndex(after);
       const boundary = at < 0 ? selected.length : at;
       if (anchor.backwards) {
         end = boundary;

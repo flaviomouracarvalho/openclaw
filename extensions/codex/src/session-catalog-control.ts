@@ -42,7 +42,6 @@ import {
   readPageParams,
 } from "./session-catalog-parsing.js";
 import { readCodexSessionMeta } from "./session-catalog-provenance.js";
-import { codexCatalogRolloutLogicalPath } from "./session-catalog-rollouts.js";
 import { CodexCatalogSourceBackoff } from "./session-catalog-source-backoff.js";
 import type {
   CodexSessionCatalogControl,
@@ -188,12 +187,8 @@ function createCodexSessionCatalogControlFromRequests(params: {
           throw unverified();
         }
         if (root) {
-          if (
-            !thread.path ||
-            (candidate?.rolloutPath &&
-              codexCatalogRolloutLogicalPath(thread.path) !==
-                codexCatalogRolloutLogicalPath(candidate.rolloutPath))
-          ) {
+          // Native reads resolve the selected rollout; a cached path can predate a revert.
+          if (!thread.path) {
             throw unverified();
           }
           const metadata = await readCodexSessionMeta(root, thread.path, threadId);

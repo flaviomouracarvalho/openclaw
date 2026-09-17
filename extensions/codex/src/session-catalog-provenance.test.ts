@@ -264,6 +264,28 @@ async function localEligibilityFixture(now = () => 0, requestTimeoutMs?: number)
 }
 
 describe("Codex exact local eligibility", () => {
+  it("accepts a newly selected native rollout before resident discovery catches up", async () => {
+    const f = await localEligibilityFixture();
+    commandRpcMocks.codexControlRequest.mockResolvedValue({ data: [{ ...f.thread }] });
+    await f.control.initialize();
+    const replacement = path.join(f.root, "reverted.jsonl");
+    await fs.copyFile(f.rollout, replacement);
+    f.thread.path = replacement;
+    f.thread.cwd = "/workspace/reverted";
+    commandRpcMocks.codexControlRequest.mockClear();
+    commandRpcMocks.codexControlRequest.mockRejectedValue(new Error("broad discovery unavailable"));
+
+    await expect(f.control.requireEligibleThread(f.thread.id)).resolves.toMatchObject({
+      path: replacement,
+      cwd: "/workspace/reverted",
+    });
+    expect((await f.control.listPage({})).sessions[0]?.cwd).toBe("/workspace/reverted");
+    expect(commandRpcMocks.codexControlRequest).not.toHaveBeenCalled();
+    expect(pinnedConnectionMocks.request.mock.calls.map(([request]) => request.method)).toEqual([
+      "thread/read",
+    ]);
+  });
+
   it.each(["cli", "vscode", { custom: "atlas" }, { custom: "chatgpt" }] as const)(
     "verifies interactive source %j using one selected rollout",
     async (source) => {
