@@ -94,9 +94,9 @@ export class CodexCatalogIndexEvents {
       if (!isRecord(params.status)) {
         return;
       }
-      // SAFETY: native v2 ThreadStatusChangedNotification carries the protocol status union.
       this.owner.updateStatus(
         id,
+        // SAFETY: native v2 ThreadStatusChangedNotification carries the protocol status union.
         codexCatalogThreadStatus(params.status as CodexThreadStatus),
         source,
       );
