@@ -128,7 +128,10 @@ Incomplete snapshots still cannot establish a pageable native prefix.
 Plugin state also has its shared capacity limit. Persistence failure
 leaves the live resident view available and is logged; a missing complete
 snapshot rebuilds on restart. The derived cache adds no database schema-version
-change and does not alter native session files, update migrations, or rollback.
+change. A snapshot read failure invalidates durable completeness for that index
+lifetime; native hydration remains available in memory, and the next successful
+restart enumerates and prunes unread stale keys. The cache does not
+alter native session files, update migrations, or rollback.
 Gateway aggregation only coalesces concurrent requests, so completed aggregate
 responses cannot delay the next poll's view of resident changes.
 

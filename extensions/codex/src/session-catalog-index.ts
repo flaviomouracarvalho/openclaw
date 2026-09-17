@@ -3,10 +3,11 @@ import { isDeepStrictEqual } from "node:util";
 import { embeddedAgentLog } from "openclaw/plugin-sdk/agent-harness-registration";
 import { toErrorObject } from "openclaw/plugin-sdk/error-runtime";
 import { sanitizeTerminalText } from "openclaw/plugin-sdk/text-chunking";
-import type { CodexThreadListParams, CodexThread } from "./app-server/protocol.js";
+import type { CodexThread } from "./app-server/protocol.js";
 import { CodexCatalogAvailability } from "./session-catalog-availability.js";
 import { CodexCatalogCurrency } from "./session-catalog-currency.js";
 import { subscribeCodexCatalogEvents } from "./session-catalog-events.js";
+import type { CodexCatalogIndexOptions } from "./session-catalog-index-contract.js";
 import { CodexCatalogIndexEvents } from "./session-catalog-index-events.js";
 import { CodexCatalogField } from "./session-catalog-index-field.js";
 import { applyCodexCatalogName } from "./session-catalog-index-names.js";
@@ -21,7 +22,6 @@ import { prepareCodexCatalogQuery } from "./session-catalog-index-query.js";
 import {
   codexCatalogMetadataPage,
   readCodexCatalogSnapshot,
-  type CodexCatalogState,
   type CodexCatalogIndexRow,
   type CodexCatalogRolloutFingerprint,
   CodexCatalogPersistence,
@@ -52,25 +52,8 @@ import type {
   CodexSessionCatalogPageParams,
 } from "./session-catalog-types.js";
 
-type CodexCatalogIndexRead = (
-  params: CodexThreadListParams,
-  remainingRows: number,
-) => Promise<{
-  rows: CodexCatalogIndexRow[];
-  excludedThreadIds?: string[];
-  nextCursor?: string;
-}>;
 type FieldRevision = { status: number; name: number };
 
-type IndexOptions = {
-  homeId: string;
-  localSessionsRoot?: string;
-  state?: CodexCatalogState;
-  readNative: CodexCatalogIndexRead;
-  requestTimeoutMs?: number;
-  assertCurrent: () => void;
-  runBackground?: (run: () => Promise<void>) => Promise<void>;
-};
 /** One home owns all queries. Only hydration, notifications and directory currency do I/O. */
 export class CodexCatalogIndex {
   private readonly rows = new Map<string, CodexCatalogIndexRow>();
@@ -100,7 +83,7 @@ export class CodexCatalogIndex {
   private readonly observations = new CodexCatalogObservations();
   private readonly events: CodexCatalogIndexEvents;
 
-  constructor(private readonly options: IndexOptions) {
+  constructor(private readonly options: CodexCatalogIndexOptions) {
     this.currency = new CodexCatalogCurrency({
       local: Boolean(options.localSessionsRoot),
       reconcileFiles: () => this.reconcile(),
@@ -246,6 +229,8 @@ export class CodexCatalogIndex {
               this.hydrate(isCurrent, this.availability.complete),
             );
           } while (observedRevision !== this.sourceRevision);
+          // A complete replacement walk also satisfies a pending snapshot refresh.
+          this.needsNativeRefresh = false;
         }
         if (this.needsNativeRefresh) {
           await this.reconcile();
@@ -310,7 +295,8 @@ export class CodexCatalogIndex {
           this.currency.start();
         }
       } catch (error) {
-        this.report(error);
+        // Unknown stored keys cannot be certified by a replacement hydration.
+        this.persistence.invalidate(error);
       }
       this.restored = true;
     });
