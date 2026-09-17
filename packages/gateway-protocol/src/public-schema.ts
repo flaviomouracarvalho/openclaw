@@ -401,6 +401,7 @@ export {
   SystemAgentSetupAuthStartParamsSchema,
   SystemAgentSetupAuthStartResultSchema,
   WizardStartParamsSchema,
+  McpAuthLoginParamsSchema,
   WizardNextParamsSchema,
   WizardCancelParamsSchema,
   WizardStatusParamsSchema,

@@ -677,4 +677,5 @@ export const CORE_GATEWAY_METHOD_SPECS = [
   // Plugin skill reads append without shifting previously advertised method indices.
   ["plugins.skills.read", "plugins", "operator.read", "2026.9"],
   ["diagnostics.heapProfile", "diagnostics", "operator.admin", "2026.9"],
+  ["mcp.authLogin", "mcp-auth-login", "operator.admin", "2026.9", CONTROL_PLANE_WRITE],
 ] as const satisfies readonly CoreGatewayMethodSpecRow[];
