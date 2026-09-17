@@ -28,6 +28,7 @@ import type {
 } from "../../plugins/session-catalog.js";
 import { getGatewayRestartDrainSignal } from "../../process/gateway-work-admission.js";
 import { authorizeGatewaySessionCreation } from "../operator-role-policy.js";
+import { getSessionRowProjection } from "../session-row-projection-access.js";
 import { resolveAgentIdOrRespondError } from "./agent-id-shared.js";
 import { authorizeSessionCatalogThread } from "./session-catalog-authorization.js";
 import { continueAuthorizedSessionCatalog } from "./session-catalog-continue.js";
@@ -333,6 +334,13 @@ export const sessionCatalogHandlers: GatewayRequestHandlers = {
       selected = catalogRegistrations.providers;
     }
     const providerAudiences = new Map(selected.map((provider) => [provider.id, provider.audience]));
+    const projection = getSessionRowProjection(context);
+    if (!projection) {
+      throw new Error("Session projection is unavailable before Gateway startup completes");
+    }
+    while (projection.needsMaterialization) {
+      await projection.ensureMaterialized();
+    }
     const config = context.getRuntimeConfig();
     const resolvedAgent = resolveAgentIdOrRespondError({
       rawAgentId: request.agentId,
@@ -353,6 +361,7 @@ export const sessionCatalogHandlers: GatewayRequestHandlers = {
       const requestEntries = createSessionCatalogRequestEntrySnapshot({
         cfg: currentConfig,
         fallbackAgentId: resolvedAgent.agentId,
+        projection,
         sessionKeys: result.catalogs
           .flatMap((catalog) => catalog.hosts)
           .flatMap((host) => host.sessions)
@@ -407,6 +416,7 @@ export const sessionCatalogHandlers: GatewayRequestHandlers = {
                 client.internal.agentRuntimeIdentity,
               ) === true),
           client?.connectionSignal ?? signal,
+          () => (projection.needsMaterialization ? projection.ensureMaterialized() : undefined),
         );
       }
     };
@@ -423,7 +433,11 @@ export const sessionCatalogHandlers: GatewayRequestHandlers = {
     if (pending) {
       // progressId is connection-owned and excluded from the work key.
       subscribe(pending.progress);
-      respond(true, projectResult(await pending.result));
+      const result = await pending.result;
+      while (projection.needsMaterialization) {
+        await projection.ensureMaterialized();
+      }
+      respond(true, projectResult(result));
       return;
     }
     const registry = catalogRegistrations.registry;
@@ -456,6 +470,7 @@ export const sessionCatalogHandlers: GatewayRequestHandlers = {
         ? createSessionCatalogRequestEntrySnapshot({
             cfg: config,
             fallbackAgentId: resolvedAgent.agentId,
+            projection,
           })
         : undefined;
       requestEntries?.freeze();
@@ -509,6 +524,9 @@ export const sessionCatalogHandlers: GatewayRequestHandlers = {
     operations.pending.set(listKey, entry);
     try {
       const result = await operation;
+      while (projection.needsMaterialization) {
+        await projection.ensureMaterialized();
+      }
       respond(true, projectResult(result));
     } catch (error) {
       progress.retire(error);

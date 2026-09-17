@@ -63,6 +63,7 @@ it("measures 100 composed catalog lists against real session and plugin stores",
         expect(setupIo.nativeRpcCalls).toBeGreaterThan(0);
         expect(setupIo.nativeThreadListCalls).toBeGreaterThan(0);
         expect(setupIo.sqliteReadCalls).toBeGreaterThan(0);
+        expect(setupIo.sessionEntryReads).toBeGreaterThan(0);
         expect(setupIo.fileReadCalls).toBeGreaterThan(0);
         expect(setupIo.pluginStateWorkerReadOperations).toBeGreaterThan(0);
 
@@ -74,6 +75,9 @@ it("measures 100 composed catalog lists against real session and plugin stores",
           );
           expect(adopted).toMatchObject({ sessionKey: expect.any(String) });
         }
+        do {
+          await fixture.projection.ensureMaterialized();
+        } while (fixture.projection.needsMaterialization);
         const head = await fixture.list();
         expect(head.sessions.filter((session) => session.sessionKey)).toHaveLength(3);
         const search = await fixture.list({ search: "Project 7", limitPerHost: 32 });
@@ -95,6 +99,9 @@ it("measures 100 composed catalog lists against real session and plugin stores",
             await fixture.list(query);
           }
         }
+        do {
+          await fixture.projection.ensureMaterialized();
+        } while (fixture.projection.needsMaterialization);
         counters.begin();
         const durations: number[] = [];
         let minimumRows = Infinity;
@@ -163,6 +170,8 @@ it("measures 100 composed catalog lists against real session and plugin stores",
         expect(io.fileReadCalls).toBe(0);
         expect(io.fileOpenCalls).toBe(0);
         expect(io.pluginStateWorkerReadOperations).toBe(0);
+        expect(io.sessionEntryReads).toBe(0);
+        expect(io.sessionPayloadReads).toBe(0);
         expect(io.bindingAuthorityReads).toBeGreaterThan(0);
         expect(durations[49]).toBeLessThan(20);
       } finally {

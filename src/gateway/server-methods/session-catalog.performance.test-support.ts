@@ -28,6 +28,11 @@ import {
 } from "../../test-utils/bundled-plugin-public-surface.js";
 import type { OpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
+import { bindSessionRowProjection } from "../session-row-projection-access.js";
+import {
+  createSessionRowProjection,
+  type SessionRowProjection,
+} from "../session-row-projection.js";
 import { sessionCatalogHandlers } from "./session-catalog.js";
 import type { createCatalogIoCounters } from "./session-catalog.performance-counters.test-support.js";
 import type { GatewayRequestHandler, GatewayClient } from "./types.js";
@@ -136,6 +141,7 @@ export async function createComposedCatalogFixture(
   }
   const previous = captureActivePluginRegistrySnapshot();
   let stopCatalog: (() => Promise<void>) | undefined;
+  let projection: SessionRowProjection | undefined;
   const closeEndpoint = async () => {
     for (const socket of server.clients) {
       socket.terminate();
@@ -145,6 +151,7 @@ export async function createComposedCatalogFixture(
     });
   };
   const cleanup = async () => {
+    projection?.dispose();
     try {
       await stopCatalog?.();
     } finally {
@@ -239,6 +246,13 @@ export async function createComposedCatalogFixture(
       nodeSendToSession: () => {},
       registerToolEventRecipient: () => {},
     });
+    projection = await createSessionRowProjection({
+      cfg: config,
+      getConfig: () => config,
+      modelCatalog: [],
+      context,
+    });
+    bindSessionRowProjection(context, () => projection);
     async function call(
       method: "sessions.catalog.list" | "sessions.catalog.continue",
       params: Record<string, unknown>,
@@ -293,6 +307,7 @@ export async function createComposedCatalogFixture(
     };
     return {
       api,
+      projection,
       rows,
       requests,
       list,

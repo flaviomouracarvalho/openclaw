@@ -61,7 +61,8 @@ vi.mock("../../plugin-state/plugin-state-worker-client.js", async (importOrigina
 
 type Counts = {
   sqliteReadCalls: number;
-  sessionFreshnessReads: number;
+  sqliteFreshnessReads: number;
+  sessionEntryReads: number;
   sessionPayloadReads: number;
   bindingAuthorityReads: number;
   otherSqliteReads: number;
@@ -72,7 +73,8 @@ type Counts = {
 };
 const empty = (): Counts => ({
   sqliteReadCalls: 0,
-  sessionFreshnessReads: 0,
+  sqliteFreshnessReads: 0,
+  sessionEntryReads: 0,
   sessionPayloadReads: 0,
   bindingAuthorityReads: 0,
   otherSqliteReads: 0,
@@ -103,6 +105,9 @@ export function createCatalogIoCounters() {
       if (enabled) {
         counts.sqliteReadCalls++;
         const sql = this.sourceSQL.toLowerCase();
+        if (sql.includes("session_nodes") || sql.includes("session_participants")) {
+          counts.sessionEntryReads++;
+        }
         if (args.includes("app-server-thread-bindings")) {
           counts.bindingAuthorityReads++;
         } else if (
@@ -110,7 +115,7 @@ export function createCatalogIoCounters() {
           sql.includes("pragma schema_version") ||
           sql.includes("openclaw_session_nodes_cache_generation")
         ) {
-          counts.sessionFreshnessReads++;
+          counts.sqliteFreshnessReads++;
         } else if (sql.includes("entry_json") || sql.includes("entry_list_json")) {
           counts.sessionPayloadReads++;
         } else {

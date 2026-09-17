@@ -18,9 +18,10 @@ The native session catalog keeps one resident index per Codex home, shared acros
 agents, working-directory filters, searches, and pages. Lists filter and page
 bounded display rows in memory. They do not expire or restart native discovery
 on the normal sidebar polling interval. This memory-only boundary is the local
-resident query. The composed Gateway request still checks current session entries
-and adoption authority through their storage owners; paired-node enumeration can
-also use network I/O. Previews remain limited to 500 characters;
+resident query. The Gateway also reads session entries from its resident session-row
+projection once ready; mutations can require exact-key refreshes before delivery.
+Native adoption bindings still use their storage owner, and paired-node enumeration
+can use network I/O. Previews remain limited to 500 characters;
 native hydration and catalog pages remain limited to 64 rows each. Native `thread/list` has no bounded metadata projection, so wire JSON can still be
 large. Immediately after decoding, catalog responses discard unused native fields
 and detach bounded metadata before the response promise settles. Each native page

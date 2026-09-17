@@ -5,10 +5,13 @@ import {
   call,
   conversationBindingMocks,
   createPluginRuntime,
+  createSessionCatalogTestContext,
   hoisted,
   provider,
   resetSessionCatalogTestState,
   resolveRegisteredCatalogCreateTarget,
+  sessionCatalogHandlers,
+  setSessionCatalogEntries,
   type PluginRegistry,
 } from "./session-catalog.test-helpers.js";
 
@@ -174,7 +177,7 @@ describe("session catalog Gateway methods", () => {
         },
       ],
     };
-    hoisted.listSessionEntriesReadOnly.mockReturnValue([
+    setSessionCatalogEntries([
       {
         sessionKey: "agent:main:owned",
         entry: { createdActor: { type: "agent", id: "worker-1" }, updatedAt: 1 },
@@ -228,13 +231,6 @@ describe("session catalog Gateway methods", () => {
         }),
       ],
     });
-    // One frozen adoption index, then one current index for each progress/final delivery.
-    expect(hoisted.listSessionEntriesReadOnly).toHaveBeenCalledTimes(3);
-    expect(hoisted.listSessionEntriesReadOnly).toHaveBeenCalledWith({
-      agentId: "main",
-      clone: false,
-      projection: "list",
-    });
   });
 
   it("does not clone the shared list projection across catalog requests", async () => {
@@ -244,32 +240,47 @@ describe("session catalog Gateway methods", () => {
         entry: { createdActor: { type: "agent" as const, id: "worker" }, updatedAt: 1 },
       },
     ];
-    hoisted.listSessionEntriesReadOnly.mockImplementation((scope) =>
-      scope?.clone === false ? storedEntries : structuredClone(storedEntries),
-    );
+    setSessionCatalogEntries(storedEntries);
+    const observedEntries: unknown[] = [];
     hoisted.activeRegistry.sessionCatalogs = [
       {
         provider: provider("claude", {
           list: vi.fn(async ({ sessionEntries }) => {
-            sessionEntries?.entriesForAgent("main");
+            observedEntries.push(sessionEntries?.entriesForAgent("main"));
             return [];
           }),
         }),
       },
     ];
-    const cloneSpy = vi.spyOn(globalThis, "structuredClone");
     const config = {};
+    const context = createSessionCatalogTestContext(config);
+    const cloneSpy = vi.spyOn(globalThis, "structuredClone");
     try {
-      await call("sessions.catalog.list", {}, config);
-      await call("sessions.catalog.list", {}, config);
+      for (let pass = 0; pass < 2; pass++) {
+        const respond = vi.fn();
+        await sessionCatalogHandlers["sessions.catalog.list"]!({
+          params: {},
+          context,
+          respond,
+        } as never);
+        expect(respond).toHaveBeenCalledWith(true, expect.anything());
+      }
 
       expect(cloneSpy).not.toHaveBeenCalled();
-      expect(hoisted.listSessionEntriesReadOnly).toHaveBeenCalledTimes(2);
-      expect(hoisted.listSessionEntriesReadOnly).toHaveBeenLastCalledWith({
-        agentId: "main",
-        clone: false,
-        projection: "list",
-      });
+      expect(observedEntries).toEqual([
+        [
+          expect.objectContaining({
+            sessionKey: "agent:main:shared",
+            entry: expect.objectContaining(storedEntries[0]!.entry),
+          }),
+        ],
+        [
+          expect.objectContaining({
+            sessionKey: "agent:main:shared",
+            entry: expect.objectContaining(storedEntries[0]!.entry),
+          }),
+        ],
+      ]);
     } finally {
       cloneSpy.mockRestore();
     }

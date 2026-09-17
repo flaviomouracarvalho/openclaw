@@ -30,6 +30,93 @@ const catalog = {
 };
 
 describe("catalog list completion ownership", () => {
+  it.each([false, true])(
+    "owns deferred subscriber delivery and rechecks retirement (retired=%s)",
+    async (retired) => {
+      const before = getActiveGatewayRootWorkCount();
+      const root = tryBeginGatewayRootWorkAdmission("catalog-deferred-subscriber");
+      expect(root).not.toBeNull();
+      const owner = new GatewayConnectionWork();
+      const lifetime = new SessionCatalogListLifetime(() => true, []);
+      const release = createDeferredCore();
+      const delivered = vi.fn();
+      let ready = false;
+      const preparation = release.promise.then(() => {
+        ready = true;
+      });
+      let drained = false;
+      try {
+        await owner.track(() =>
+          root!.run(async () => {
+            lifetime.subscribe(
+              "active",
+              delivered,
+              () => true,
+              undefined,
+              () => (ready ? undefined : preparation),
+            );
+            await lifetime.runProvider(
+              () => lifetime.publish(catalog, new Map()),
+              async (params) => params.onHost(host),
+            );
+          }),
+        );
+        root!.release();
+        lifetime.finishListing();
+        const closing = owner.drain().then(() => {
+          drained = true;
+        });
+        await nextTurn();
+        expect(drained).toBe(false);
+        expect(getActiveGatewayRootWorkCount()).toBe(before + 1);
+        if (retired) {
+          lifetime.retire();
+        }
+        release.resolve();
+        await closing;
+        expect(delivered).toHaveBeenCalledTimes(retired ? 0 : 1);
+        expect(getActiveGatewayRootWorkCount()).toBe(before);
+      } finally {
+        release.resolve();
+        lifetime.finishListing();
+        root!.release();
+        await owner.drain();
+      }
+    },
+  );
+
+  it("coalesces a blocked subscriber's progress to one latest publication", async () => {
+    const lifetime = new SessionCatalogListLifetime(() => true, []);
+    const release = createDeferredCore();
+    const received = createDeferredCore();
+    let ready = false;
+    const preparation = release.promise.then(() => {
+      ready = true;
+    });
+    const prepare = vi.fn(() => (ready ? undefined : preparation));
+    const delivered = vi.fn(() => received.resolve());
+    lifetime.subscribe("active", delivered, () => true, undefined, prepare);
+    try {
+      for (let index = 0; index < 100; index++) {
+        lifetime.publish({ ...catalog, label: `Progress ${index}` }, new Map());
+      }
+      expect(delivered).not.toHaveBeenCalled();
+      expect(prepare).toHaveBeenCalledOnce();
+      lifetime.finishListing();
+      release.resolve();
+      await received.promise;
+      expect(delivered).toHaveBeenCalledExactlyOnceWith(
+        { ...catalog, label: "Progress 99" },
+        new Map(),
+      );
+    } finally {
+      release.resolve();
+      await preparation;
+      lifetime.retire();
+      lifetime.finishListing();
+    }
+  });
+
   it("keeps work started before retirement owned when registration follows an await", async () => {
     const before = getActiveGatewayRootWorkCount();
     const root = tryBeginGatewayRootWorkAdmission("catalog-register-after-retirement");

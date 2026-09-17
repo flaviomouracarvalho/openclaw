@@ -26,6 +26,8 @@ import {
 import { createDeferredCore } from "../../shared/deferred.js";
 import { ensureProfileForEmail, linkEmail } from "../../state/user-profiles.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import { bindSessionRowProjection } from "../session-row-projection-access.js";
+import { createSessionRowProjection } from "../session-row-projection.js";
 import { sessionCatalogHandlers } from "./session-catalog.js";
 import type { GatewayClient, GatewayRequestContext } from "./types.js";
 
@@ -34,9 +36,12 @@ async function withCatalog(
 ) {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
     const previousRegistry = getActivePluginRegistry() ?? createEmptyPluginRegistry();
+    let fixture: Awaited<ReturnType<typeof createCatalog>> | undefined;
     try {
-      await run(await createCatalog());
+      fixture = await createCatalog();
+      await run(fixture);
     } finally {
+      fixture?.projection.dispose();
       setActivePluginRegistry(previousRegistry);
     }
   });
@@ -133,6 +138,7 @@ async function createCatalog() {
     }) as GatewayClient;
   const owner = client(caller.id);
   const foreignOwner = client(other.id);
+  const projection = await createSessionRowProjection({ cfg: config, getConfig: () => config });
   const call = async (
     method: keyof typeof sessionCatalogHandlers = "sessions.catalog.list",
     params: Record<string, unknown> = {},
@@ -140,10 +146,13 @@ async function createCatalog() {
     broadcastToConnIds = vi.fn(),
   ) => {
     const respond = vi.fn();
-    const context = { getRuntimeConfig: () => config, broadcastToConnIds } satisfies Pick<
-      GatewayRequestContext,
-      "getRuntimeConfig" | "broadcastToConnIds"
-    >;
+    const context = bindSessionRowProjection(
+      { getRuntimeConfig: () => config, broadcastToConnIds } satisfies Pick<
+        GatewayRequestContext,
+        "getRuntimeConfig" | "broadcastToConnIds"
+      >,
+      () => projection,
+    );
     await withPluginRuntimeGatewayRequestScope(
       { client: requestClient, pluginRegistry: registry, isWebchatConnect: () => false },
       () =>
@@ -198,6 +207,7 @@ async function createCatalog() {
     read,
     continueSession,
     archive,
+    projection,
   };
 }
 
@@ -273,63 +283,48 @@ describe("catalog delivery uses current canonical privacy", () => {
     });
   });
 
-  it("materializes only delivered catalog rows while preserving full planning and fresh identity", async () => {
-    await withCatalog(async ({ call, callerId, enumerate, list, owner, replaceForeign }) => {
-      for (let index = 0; index < 24; index++) {
-        await upsertSessionEntryCore(
-          { agentId: "main", sessionKey: `agent:main:unrelated-${index}` },
-          { sessionId: `unrelated-${index}`, updatedAt: 1 },
-        );
-      }
-      type ReadPhase = "planning" | "progress" | "mutation" | "final";
-      let phase: ReadPhase = "planning";
-      const reads: Array<{ phase: ReadPhase; count: number }> = [];
-      const original = sessionAccessor.listSessionEntriesReadOnly;
-      const read = vi
-        .spyOn(sessionAccessor, "listSessionEntriesReadOnly")
-        .mockImplementation((scope) => {
-          const result = original(scope);
-          reads.push({ phase, count: result.length });
-          return result;
-        });
-      list.mockImplementation(async ({ sessionEntries, onHost }) => {
-        expect(sessionEntries?.entriesForCatalog?.()).toHaveLength(27);
-        const host = enumerate(sessionEntries);
-        phase = "progress";
-        onHost?.(host);
-        phase = "mutation";
-        await replaceForeign();
-        phase = "final";
-        return [host];
-      });
-      try {
-        const broadcast = vi.fn();
-        const response = await call(
-          "sessions.catalog.list",
-          { progressId: "delivery-budget" },
-          owner,
-          broadcast,
-        );
-        const progress = broadcast.mock.calls[0]?.[1]?.catalog.hosts[0]?.sessions;
-        expect(broadcast).toHaveBeenCalledOnce();
-        expect(progress?.map((session: { threadId: string }) => session.threadId)).toEqual([
-          "foreign",
-          "owned",
-        ]);
-        expect(
-          progress?.find((session: { threadId: string }) => session.threadId === "owned"),
-        ).toMatchObject({ createdActor: { id: callerId } });
-        expect(rows(response)).toEqual(["owned"]);
-        for (const deliveryPhase of ["progress", "final"] as const) {
-          const materializedRows = reads
-            .filter((observed) => observed.phase === deliveryPhase)
-            .reduce((total, observed) => total + observed.count, 0);
-          expect(materializedRows).toBeLessThanOrEqual(3);
+  it("uses resident delivery rows while preserving full planning and fresh identity", async () => {
+    await withCatalog(
+      async ({ call, callerId, enumerate, list, owner, replaceForeign, projection }) => {
+        for (let index = 0; index < 24; index++) {
+          await upsertSessionEntryCore(
+            { agentId: "main", sessionKey: `agent:main:unrelated-${index}` },
+            { sessionId: `unrelated-${index}`, updatedAt: 1 },
+          );
         }
-      } finally {
-        read.mockRestore();
-      }
-    });
+        await projection.ensureMaterialized();
+        const read = vi.spyOn(sessionAccessor, "listSessionEntriesReadOnly");
+        list.mockImplementation(async ({ sessionEntries, onHost }) => {
+          expect(sessionEntries?.entriesForCatalog?.()).toHaveLength(27);
+          const host = enumerate(sessionEntries);
+          onHost?.(host);
+          await replaceForeign();
+          return [host];
+        });
+        try {
+          const broadcast = vi.fn();
+          const response = await call(
+            "sessions.catalog.list",
+            { progressId: "delivery-budget" },
+            owner,
+            broadcast,
+          );
+          const progress = broadcast.mock.calls[0]?.[1]?.catalog.hosts[0]?.sessions;
+          expect(broadcast).toHaveBeenCalledOnce();
+          expect(progress?.map((session: { threadId: string }) => session.threadId)).toEqual([
+            "foreign",
+            "owned",
+          ]);
+          expect(
+            progress?.find((session: { threadId: string }) => session.threadId === "owned"),
+          ).toMatchObject({ createdActor: { id: callerId } });
+          expect(rows(response)).toEqual(["owned"]);
+          expect(read).not.toHaveBeenCalled();
+        } finally {
+          read.mockRestore();
+        }
+      },
+    );
   });
 
   it.each([
@@ -654,7 +649,8 @@ describe("catalog delivery uses current canonical privacy", () => {
           onHost?.(observed);
           return [observed];
         });
-        const broadcast = vi.fn();
+        const delivered = createDeferredCore();
+        const broadcast = vi.fn(() => delivered.resolve());
         const pending = call(
           "sessions.catalog.list",
           { progressId: "replacement" },
@@ -671,6 +667,7 @@ describe("catalog delivery uses current canonical privacy", () => {
           release.resolve();
           const result = await pending;
           await publication;
+          await delivered.promise;
           // The provider's request snapshot keeps the original adoption even when first read
           // after its await; publication must reject that now-replaced instance independently.
           expect
