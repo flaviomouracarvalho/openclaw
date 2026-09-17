@@ -36,50 +36,101 @@ function savedState(values: StoredCodexCatalogEntry[]): CodexCatalogState {
 }
 
 describe("cold resident catalog availability", () => {
-  it("keeps forward navigation after archiving a backward anchor during hydration", async () => {
-    const tailEntered = createDeferred<void>();
-    const tail = createDeferred<void>();
-    const readNative = vi.fn(async ({ cursor }: CodexThreadListParams) => {
-      if (!cursor) {
-        return {
-          rows: [
-            { ...row("alpha"), recencyAt: 300 },
-            { ...row("bravo"), recencyAt: 200 },
-          ],
-          nextCursor: "native-tail",
-        };
+  it.each([
+    {
+      label: "an archived anchor during hydration",
+      complete: false,
+      removed: ["bravo"],
+      previous: ["alpha"],
+      following: ["charlie"],
+    },
+    {
+      label: "a removed preceding page",
+      complete: true,
+      removed: ["alpha"],
+      previous: ["bravo"],
+      following: ["charlie"],
+    },
+    {
+      label: "a removed preceding page during hydration",
+      complete: false,
+      removed: ["alpha"],
+      previous: ["bravo"],
+      following: ["charlie"],
+    },
+    {
+      label: "a removed prefix and anchor",
+      complete: true,
+      removed: ["alpha", "bravo"],
+      previous: ["charlie"],
+      following: [],
+    },
+    {
+      label: "an empty prefix during hydration",
+      complete: false,
+      removed: ["alpha", "bravo"],
+      previous: [],
+      following: ["charlie"],
+    },
+  ])(
+    "keeps navigation after $label",
+    async ({ complete, removed, previous: expectedPrevious, following: expectedFollowing }) => {
+      const tailEntered = createDeferred<void>();
+      const tail = createDeferred<void>();
+      const readNative = vi.fn(async ({ cursor }: CodexThreadListParams) => {
+        if (!cursor) {
+          return {
+            rows: [
+              { ...row("alpha"), recencyAt: 300 },
+              { ...row("bravo"), recencyAt: 200 },
+            ],
+            nextCursor: "native-tail",
+          };
+        }
+        tailEntered.resolve();
+        await tail.promise;
+        return { rows: [row("charlie")] };
+      });
+      const index = new CodexCatalogIndex({
+        homeId: "cold-backward-archive",
+        readNative,
+        assertCurrent: () => {},
+      });
+      try {
+        const first = await index.list({ limit: 1 });
+        await tailEntered.promise;
+        if (complete) {
+          tail.resolve();
+          await index.initialize();
+        }
+        const second = await index.list({ limit: 1, cursor: first.nextCursor });
+        expect(second.sessions.map((session) => session.threadId)).toEqual(["bravo"]);
+        expect(second.backwardsCursor).toEqual(expect.any(String));
+        for (const id of removed) {
+          index.archive(id);
+        }
+        const previous = await index.list({ limit: 1, cursor: second.backwardsCursor });
+        expect(previous.sessions.map((session) => session.threadId)).toEqual(expectedPrevious);
+        expect(previous.backwardsCursor).toBeUndefined();
+        if (expectedFollowing.length) {
+          expect(previous.nextCursor).toEqual(expect.any(String));
+        } else {
+          expect(previous.nextCursor).toBeUndefined();
+        }
+        tail.resolve();
+        await index.initialize();
+        if (expectedFollowing.length) {
+          const following = await index.list({ limit: 1, cursor: previous.nextCursor });
+          expect(following.sessions.map((session) => session.threadId)).toEqual(expectedFollowing);
+          expect(following.nextCursor).toBeUndefined();
+        }
+        expect(readNative).toHaveBeenCalledTimes(2);
+      } finally {
+        tail.resolve();
+        await index.close();
       }
-      tailEntered.resolve();
-      await tail.promise;
-      return { rows: [row("charlie")] };
-    });
-    const index = new CodexCatalogIndex({
-      homeId: "cold-backward-archive",
-      readNative,
-      assertCurrent: () => {},
-    });
-    try {
-      const first = await index.list({ limit: 1 });
-      await tailEntered.promise;
-      const second = await index.list({ limit: 1, cursor: first.nextCursor });
-      expect(second.sessions.map((session) => session.threadId)).toEqual(["bravo"]);
-      expect(second.backwardsCursor).toEqual(expect.any(String));
-      index.archive("bravo");
-      const previous = await index.list({ limit: 1, cursor: second.backwardsCursor });
-      expect(previous.sessions.map((session) => session.threadId)).toEqual(["alpha"]);
-      expect(previous.nextCursor).toEqual(expect.any(String));
-
-      tail.resolve();
-      await index.initialize();
-      const following = await index.list({ limit: 1, cursor: previous.nextCursor });
-      expect(following.sessions.map((session) => session.threadId)).toEqual(["charlie"]);
-      expect(following.nextCursor).toBeUndefined();
-      expect(readNative).toHaveBeenCalledTimes(2);
-    } finally {
-      tail.resolve();
-      await index.close();
-    }
-  });
+    },
+  );
 
   it("shares one native first page among four cold callers without returning false empty results", async () => {
     const entered = createDeferred<void>();

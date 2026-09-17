@@ -21,7 +21,6 @@ import {
 import { prepareCodexCatalogQuery } from "./session-catalog-index-query.js";
 import {
   codexCatalogMetadataPage,
-  readCodexCatalogSnapshot,
   type CodexCatalogIndexRow,
   type CodexCatalogRolloutFingerprint,
   CodexCatalogPersistence,
@@ -262,7 +261,7 @@ export class CodexCatalogIndex {
     }
     this.restoring ??= this.observations.observe(async (isCurrent) => {
       try {
-        const snapshot = await readCodexCatalogSnapshot(this.options.state);
+        const snapshot = await this.persistence.readSnapshot();
         this.assertCurrent();
         if (snapshot.cleanupIncomplete) {
           this.persistence.invalidate(

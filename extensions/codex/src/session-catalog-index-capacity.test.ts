@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import {
-  readCodexCatalogSnapshot,
+  CodexCatalogPersistence,
   type CodexCatalogIndexRow,
   type CodexCatalogState,
   type StoredCodexCatalogEntry,
@@ -51,6 +51,41 @@ function completeState(rows: CodexCatalogIndexRow[]): CodexCatalogState {
 }
 
 describe("resident Codex catalog restore bounds", () => {
+  it("reads snapshots after mutations admitted while an earlier write settles", async () => {
+    const values = new Map<string, StoredCodexCatalogEntry>();
+    const state: CodexCatalogState = {
+      entries: async () => [...values].map(([key, value]) => ({ key, value, createdAt: 0 })),
+      register: async (key, value) => {
+        values.set(key, value);
+      },
+      delete: async (key) => values.delete(key),
+    };
+    const persistence = new CodexCatalogPersistence(state, () => {});
+    try {
+      persistence.put(row("first", 200));
+      persistence.put(row("second", 100));
+      await persistence.finishHydration();
+      const remove = state.delete;
+      vi.spyOn(state, "delete").mockImplementation(async (key) => {
+        const value = values.get(key);
+        const deleted = await remove(key);
+        if (value?.kind === "row" && value.row.threadId === "first") {
+          queueMicrotask(() => queueMicrotask(() => persistence.remove("second")));
+        }
+        return deleted;
+      });
+
+      persistence.remove("first");
+      const snapshot = await persistence.readSnapshot();
+
+      expect(snapshot.rows).toEqual([]);
+      expect(snapshot.complete).toBe(true);
+      expect([...values.values()]).toEqual([{ version: 1, kind: "complete" }]);
+    } finally {
+      await persistence.retire();
+    }
+  });
+
   it("bounds a complete snapshot by evicting archived-oldest rows before active rows", async () => {
     const active = Array.from({ length: 19_999 }, (_, index) =>
       row(`active-${index}`, 20_000 - index),
@@ -104,7 +139,10 @@ describe("resident Codex catalog restore bounds", () => {
   it("cleans a full invalid snapshot without mistaking repeated keys for overflow", async () => {
     const rows = Array.from({ length: 20_000 }, (_, index) => row(`invalid-${index}`, index));
     rows[0]!.preview = "x".repeat(501);
-    const snapshot = await readCodexCatalogSnapshot(completeState(rows));
+    const snapshot = await new CodexCatalogPersistence(
+      completeState(rows),
+      () => {},
+    ).readSnapshot();
     expect(snapshot.rows).toEqual([]);
     expect(snapshot.complete).toBe(false);
     expect(snapshot.cleanupIncomplete).toBe(false);
@@ -119,12 +157,18 @@ describe("resident Codex catalog restore bounds", () => {
     async ({ field, limit }) => {
       const valid = row("bounded", 100);
       valid[field] = field === "rolloutPath" ? `/${"x".repeat(limit - 1)}` : "x".repeat(limit);
-      const accepted = await readCodexCatalogSnapshot(completeState([valid]));
+      const accepted = await new CodexCatalogPersistence(
+        completeState([valid]),
+        () => {},
+      ).readSnapshot();
       expect(accepted.complete).toBe(true);
       expect(accepted.rows[0]?.[field]).toHaveLength(limit);
 
       const oversized = { ...valid, [field]: `${valid[field]}x` };
-      const rejected = await readCodexCatalogSnapshot(completeState([oversized]));
+      const rejected = await new CodexCatalogPersistence(
+        completeState([oversized]),
+        () => {},
+      ).readSnapshot();
       expect(rejected.complete).toBe(false);
       expect(rejected.rows).toEqual([]);
       expect(rejected.obsolete).toEqual(new Set(["bounded", "complete"]));

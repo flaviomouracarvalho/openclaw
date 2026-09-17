@@ -36,6 +36,9 @@ or skip them. Newly discovered or newly active rows receive fresh positions ahea
 of an existing timestamp tie, preserving native order within each discovery batch.
 An observed turn start also receives a fresh position when its recency falls in
 the same exposed timestamp second as earlier activity.
+If every earlier matching row disappears, backward navigation returns the first
+remaining matching page. An empty known prefix retains forward continuation while
+hydration is incomplete.
 
 Search and managed-session exclusion filling examine at most 20 resident pages
 per request. If that limit is reached, the result retains an opaque continuation
@@ -54,8 +57,10 @@ background. Partial or invalid saved caches are rebuilt before their rows are
 shown, and initial retries preserve positions already used in continuation cursors.
 The index persists reconstructible display rows and file fingerprints through
 plugin state in the OpenClaw SQLite database. A valid complete snapshot serves the
-first list without a native request, including on remote app-servers. Background
-work then reconciles changed files and native metadata. A
+first list without a native request, including on remote app-servers.
+Snapshot restoration waits for earlier cache writes, and mutations received during
+restoration fence stale saved rows from publication. Background work then
+reconciles changed files and native metadata. A
 database-only native metadata walk recovers changes made while the Gateway was
 stopped and repeats every 30 seconds, including renames, Git branch and other displayed metadata, and the selected rollout
 path after a native revert. Metadata changes and explicit clears are applied even

@@ -109,7 +109,7 @@ function readStoredCodexCatalogRow(value: unknown): CodexCatalogIndexRow | undef
 }
 
 /** An incomplete cache cannot prove which native rows precede an issued cursor. */
-export async function readCodexCatalogSnapshot(state: CodexCatalogState | undefined) {
+async function readCodexCatalogSnapshot(state: CodexCatalogState | undefined) {
   const entries = (await state?.entries()) ?? [];
   const rows = new Map<string, CodexCatalogIndexRow>();
   const keys = new Map<string, string>();
@@ -190,6 +190,11 @@ export class CodexCatalogPersistence {
     private readonly report: (error: unknown) => void,
   ) {}
 
+  async readSnapshot() {
+    await this.drain();
+    return await readCodexCatalogSnapshot(this.state);
+  }
+
   private key(threadId: string): string {
     return `thread:${createHash("sha256").update(threadId).digest("hex")}`;
   }
@@ -227,7 +232,9 @@ export class CodexCatalogPersistence {
   }
 
   private async drain(): Promise<void> {
-    await this.writing;
+    while (this.writing) {
+      await this.writing;
+    }
   }
 
   retire(): Promise<void> {
@@ -252,27 +259,30 @@ export class CodexCatalogPersistence {
       return;
     }
     this.pending.set(key, value);
-    this.writing ??= this.writePending().finally(() => {
-      this.writing = undefined;
-    });
+    this.writing ??= this.writePending();
   }
 
   private async writePending(): Promise<void> {
-    await nextTurn();
-    for (const [key, value] of this.pending) {
-      this.pending.delete(key);
-      try {
-        // Bound state operations retain authority for already-admitted shutdown work.
-        if (value) {
-          await this.state!.register(key, value);
-        } else {
-          await this.state!.delete(key);
-        }
-      } catch (error) {
-        if (!this.failed) {
-          this.invalidate(error);
+    try {
+      await nextTurn();
+      for (const [key, value] of this.pending) {
+        this.pending.delete(key);
+        try {
+          // Bound state operations retain authority for already-admitted shutdown work.
+          if (value) {
+            await this.state!.register(key, value);
+          } else {
+            await this.state!.delete(key);
+          }
+        } catch (error) {
+          if (!this.failed) {
+            this.invalidate(error);
+          }
         }
       }
+    } finally {
+      // New work can arrive before this promise's settlement callbacks run.
+      this.writing = undefined;
     }
   }
 }

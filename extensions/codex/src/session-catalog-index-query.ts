@@ -113,7 +113,12 @@ export function prepareCodexCatalogQuery(homeId: string, params: CodexSessionCat
         start = boundary;
       }
     }
-    const page = selected.slice(start, end ?? start + limit);
+    let page = selected.slice(start, end ?? start + limit);
+    if (anchor?.backwards && !page.length) {
+      // The preceding page disappeared; keep navigation at the current head.
+      start = 0;
+      page = candidates.slice(0, limit);
+    }
     const first = page[0];
     const last = page.at(-1);
     let continuation: CodexCatalogOrderKey | undefined =
@@ -123,8 +128,8 @@ export function prepareCodexCatalogQuery(homeId: string, params: CodexSessionCat
         : start + page.length < selected.length)
         ? last
         : undefined;
-    if (!complete && !anchor?.backwards && !continuation) {
-      if (!last && (!frontier || !after(frontier))) {
+    if (!complete && !continuation) {
+      if (!anchor?.backwards && !last && (!frontier || !after(frontier))) {
         return undefined;
       }
       continuation =
