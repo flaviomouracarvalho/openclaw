@@ -16,9 +16,9 @@ import {
 } from "./plugin-metadata.test-support.js";
 import {
   listProviderPolicyOwners,
+  listTrustedExternalProviderPolicyOwners,
   resolveBundledProviderPolicyOwner,
 } from "./provider-policy-owners.js";
-import { listTrustedExternalProviderPolicyOwners } from "./provider-public-artifacts.js";
 
 const registryModes = ["mutable", "snapshot", "manifest", "projected", "restored"] as const;
 
