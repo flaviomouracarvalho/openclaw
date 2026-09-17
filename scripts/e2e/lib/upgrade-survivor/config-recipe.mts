@@ -9,6 +9,7 @@ import {
   parsePinnedReleaseVersion,
   parseReleaseVersion,
 } from "../../../lib/release-version.mjs";
+import { isChannelPostCoreScenario } from "../../../lib/upgrade-survivor-policy.mjs";
 import { buildCmdExeCommandLine, resolveWindowsCmdExePath } from "../../../windows-cmd-helpers.mjs";
 
 const args = process.argv.slice(2);
@@ -22,6 +23,7 @@ type ConfigStep = {
   intents?: string[];
   argv: string[];
   prepublishPluginPackages?: string[];
+  authoredConfigFile?: string;
 };
 
 type BaselineAdaptationSummary = { skippedIntents: string[] };
@@ -260,7 +262,20 @@ const connectionOnlyScenarios = new Set(["mobile-pairing-reconnect", "watchos-di
 export function resolveUpgradeSurvivorConfigSteps(
   scenario = "base",
   configuredUpdateChannel = process.env.OPENCLAW_UPGRADE_SURVIVOR_UPDATE_CHANNEL,
+  baselineVersion: string | null = null,
 ): ConfigStep[] {
+  if (isChannelPostCoreScenario(scenario) && baselineVersion === "2026.4.15") {
+    return [
+      {
+        id: "channel-post-core-config",
+        intent: "update",
+        intents: ["update", "gateway", "whatsapp-channel", "validate"],
+        argv: ["config", "validate"],
+        authoredConfigFile: "channel-post-core-restore.json",
+        prepublishPluginPackages: ["@openclaw/whatsapp"],
+      },
+    ];
+  }
   const validateStep = sharedRecipe.at(-1);
   const updateChannel =
     configuredUpdateChannel || (scenario === "prerelease-plugin-registry" ? "beta" : "stable");
@@ -460,9 +475,13 @@ export function resolveUpgradeSurvivorConfigStepsForBaseline(
   baselineVersion: string | null = null,
 ): ConfigStep[] {
   return [
-    ...adaptRecipeForBaseline(resolveUpgradeSurvivorConfigSteps(scenario), baselineVersion, {
-      skippedIntents: [],
-    }),
+    ...adaptRecipeForBaseline(
+      resolveUpgradeSurvivorConfigSteps(scenario, undefined, baselineVersion),
+      baselineVersion,
+      {
+        skippedIntents: [],
+      },
+    ),
   ];
 }
 
@@ -494,6 +513,14 @@ function errorCode(error: unknown) {
 }
 
 export function runUpgradeSurvivorOpenClawStep(step: ConfigStep, params: ConfigCommandParams = {}) {
+  if (step.authoredConfigFile) {
+    const configPath = process.env.OPENCLAW_CONFIG_PATH;
+    if (!configPath) {
+      throw new Error("Authored config fixture requires OPENCLAW_CONFIG_PATH");
+    }
+    // The published writer must produce every retired byte in this witness.
+    writeJson(configPath, JSON.parse(readConfigSection(step.authoredConfigFile)));
+  }
   const invocation = resolveUpgradeSurvivorOpenClawCommand(step.argv);
   const run: SpawnSyncCommand = params.spawnSyncCommand ?? spawnSync;
   const timeoutMs = params.timeoutMs ?? CONFIG_COMMAND_TIMEOUT_MS;
@@ -527,7 +554,7 @@ function applyRecipe() {
   const summaryPath = option("--summary");
   const baselineVersion = option("--baseline-version", null);
   const scenario = selectedScenario();
-  const recipeSteps = resolveUpgradeSurvivorConfigSteps(scenario);
+  const recipeSteps = resolveUpgradeSurvivorConfigSteps(scenario, undefined, baselineVersion);
   const summary: {
     source: string;
     recipe: string;
@@ -537,7 +564,9 @@ function applyRecipe() {
     skippedIntents: string[];
     steps: ReturnType<typeof runUpgradeSurvivorOpenClawStep>[];
   } = {
-    source: "baseline-cli-command-recipe",
+    source: recipeSteps.some((step) => step.authoredConfigFile)
+      ? "synthetic-cross-version-config"
+      : "baseline-cli-command-recipe",
     recipe: "upgrade-survivor-v1",
     baselineVersion,
     scenario,

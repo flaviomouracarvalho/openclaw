@@ -1,11 +1,15 @@
 import catalog from "./upgrade-survivor-scenarios.json" with { type: "json" };
 
 const UPGRADE_SURVIVOR_SCENARIOS = Object.freeze(catalog.scenarios);
-// Frozen Codex allowlist recipes retain their assertion-only scenario.
+// Direct-only recipes stay outside aggregate scheduling.
 export const UPGRADE_SURVIVOR_ASSERTION_SCENARIOS = Object.freeze([
   ...UPGRADE_SURVIVOR_SCENARIOS,
   ...catalog.assertionOnlyScenarios,
 ]);
+
+export function isChannelPostCoreScenario(scenario) {
+  return scenario === "channel-post-core-restore" || scenario === "channel-post-core-readiness";
+}
 
 // Oldest release line supported by the operator-state upgrade regression gate.
 export const OLDEST_SUPPORTED_UPGRADE_SURVIVOR_BASELINE = "2026.6.34";

@@ -93,6 +93,8 @@ process.exit(failed ? 17 : 0);
         RECIPE_PATH,
         "scripts/e2e/lib/upgrade-survivor/config-recipe",
         "scripts/lib/release-version.mjs",
+        "scripts/lib/upgrade-survivor-policy.mjs",
+        "scripts/lib/upgrade-survivor-scenarios.json",
         "scripts/windows-cmd-helpers.mjs",
       ]) {
         mkdirSync(dirname(join(root, file)), { recursive: true });
@@ -151,6 +153,9 @@ node() {
       loggedArgs,
       summary: existsSync(summaryPath) ? JSON.parse(readFileSync(summaryPath, "utf8")) : null,
       legacySeeded: existsSync(legacyMarker),
+      authoredConfig: existsSync(join(root, "config.json"))
+        ? JSON.parse(readFileSync(join(root, "config.json"), "utf8"))
+        : null,
     };
   } finally {
     rmSync(root, { force: true, recursive: true });
@@ -158,6 +163,42 @@ node() {
 }
 
 describe("upgrade survivor config recipe command resolution", () => {
+  it.each(["channel-post-core-restore", "channel-post-core-readiness"])(
+    "authors the 4.15 %s witness without retired metadata and validates through the baseline",
+    (selectedScenario) => {
+      const { result, summary, loggedArgs, authoredConfig } = runRecipeFixture({
+        scenario: selectedScenario,
+        version: "2026.4.15",
+      });
+      expect(result.status, result.stderr).toBe(0);
+      expect(loggedArgs).toEqual([["config", "validate"]]);
+      expect(summary.source).toBe("synthetic-cross-version-config");
+      expect(authoredConfig).not.toHaveProperty("meta");
+      expect(authoredConfig.update.channel).toBe("stable");
+      expect(authoredConfig.plugins).toEqual({
+        enabled: true,
+        allow: ["whatsapp"],
+        entries: { whatsapp: { enabled: true } },
+      });
+      expect(
+        authoredConfig.channels.whatsapp.groups["120363000000000000@g.us"].requireMention,
+      ).toBe(true);
+      expect(
+        resolveUpgradeSurvivorConfigStepsForBaseline(selectedScenario, "2026.4.15").flatMap(
+          (step) => step.prepublishPluginPackages ?? [],
+        ),
+      ).toEqual(["@openclaw/whatsapp"]);
+      for (const [scenario, version] of [
+        ["base", "2026.4.15"],
+        ["channel-post-core-restore", "2026.4.29"],
+      ]) {
+        const steps = resolveUpgradeSurvivorConfigStepsForBaseline(scenario, version);
+        expect(steps.some((step) => step.authoredConfigFile)).toBe(false);
+        expect(steps.some((step) => step.id === "models-openai")).toBe(true);
+      }
+    },
+  );
+
   it("selects the prerelease update channel for the plugin registry", () => {
     const runner = readFileSync(RUN_PATH, "utf8");
     expect(runner).toContain('OPENCLAW_UPGRADE_SURVIVOR_UPDATE_CHANNEL="beta"');

@@ -1,6 +1,7 @@
 import { readConfigFileSnapshot } from "../../config/config.js";
 import { normalizeUpdateChannel } from "../../infra/update-channels.js";
 import { hasDeferredUpdateModelRetirement } from "../../infra/update-deferred-model-retirement.js";
+import { normalizeUpdatePostInstallDoctorWarnings } from "../../infra/update-doctor-result.js";
 import {
   POST_CORE_UPDATE_REQUESTED_CHANNEL_ENV,
   POST_CORE_UPDATE_INSTALL_RECORDS_PATH_ENV,
@@ -83,6 +84,7 @@ async function resumePostCoreUpdateInternal(params: ResumePostCoreUpdateParams):
   process.env.OPENCLAW_COMPATIBILITY_HOST_VERSION =
     (await readPackageVersion(params.root)) ?? VERSION;
 
+  const doctorWarnings: string[] = [];
   const parentOwnsCompletion = await postCoreUpdateParentOwnsCompletion(
     process.env[POST_CORE_UPDATE_RESULT_PATH_ENV],
   );
@@ -98,6 +100,7 @@ async function resumePostCoreUpdateInternal(params: ResumePostCoreUpdateParams):
       yes: params.opts.yes === true,
       json: params.opts.json === true,
       timeoutMs: params.timeoutMs,
+      onWarnings: (warnings) => doctorWarnings.push(...warnings),
     });
   }
 
@@ -148,7 +151,7 @@ async function resumePostCoreUpdateInternal(params: ResumePostCoreUpdateParams):
   });
   // Release plugin ownership before Doctor reacquires it. Publishing the result
   // permits the parent to stop this child, so all child-owned work must settle first.
-  const pluginUpdate =
+  let pluginUpdate =
     !parentOwnsCompletion || (!producedPluginUpdate.changed && hasDeferredUpdateModelRetirement())
       ? (
           await completePostCorePluginUpdate({
@@ -158,9 +161,24 @@ async function resumePostCoreUpdateInternal(params: ResumePostCoreUpdateParams):
             yes: params.opts.yes === true,
             json: params.opts.json === true,
             timeoutMs: params.timeoutMs,
+            onWarnings: (warnings) => doctorWarnings.push(...warnings),
           })
         ).pluginUpdate
       : producedPluginUpdate;
+  if (doctorWarnings.length > 0) {
+    pluginUpdate = {
+      ...pluginUpdate,
+      status: pluginUpdate.status === "error" ? "error" : "warning",
+      warnings: [
+        ...(pluginUpdate.warnings ?? []),
+        ...normalizeUpdatePostInstallDoctorWarnings(doctorWarnings).map((message) => ({
+          reason: "post-core-doctor-warning",
+          message,
+          guidance: [],
+        })),
+      ],
+    };
+  }
   // Only the target process may restamp an unchanged downgrade config. Plugin
   // migrations that still invalidate it will write through the target Doctor later.
   await persistValidatedDowngradeConfig(await readConfigFileSnapshot());

@@ -763,13 +763,13 @@ export function requiredPrepublishPluginPackagesForLanes(poolLanes: DockerE2eLan
       requiredPackages.add("@openclaw/duckduckgo-plugin");
       continue;
     }
-    for (const packageName of UPGRADE_SURVIVOR_RUNTIME_COMPANION_PACKAGES) {
-      requiredPackages.add(packageName);
+    const baselineVersion = upgradeSurvivorBaselineVersionForLane(poolLane);
+    if (scenario !== "channel-post-core-restore" || baselineVersion !== "2026.4.15") {
+      for (const packageName of UPGRADE_SURVIVOR_RUNTIME_COMPANION_PACKAGES) {
+        requiredPackages.add(packageName);
+      }
     }
-    const steps = resolveUpgradeSurvivorConfigStepsForBaseline(
-      scenario,
-      upgradeSurvivorBaselineVersionForLane(poolLane),
-    );
+    const steps = resolveUpgradeSurvivorConfigStepsForBaseline(scenario, baselineVersion);
     for (const step of steps) {
       for (const packageName of step.prepublishPluginPackages ?? []) {
         requiredPackages.add(packageName);

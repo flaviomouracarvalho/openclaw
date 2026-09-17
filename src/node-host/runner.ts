@@ -35,7 +35,7 @@ import {
   coerceNodeInvokePayload,
 } from "./invoke-payload.js";
 import { prepareNodeHostRuntime } from "./runtime.js";
-import { runStartupMigrations } from "./startup-state-migrations.js";
+import { ensureNodeHostStateReady } from "./startup-state-readiness.js";
 
 type NodeHostRunOptions = {
   gatewayHost: string;
@@ -164,9 +164,7 @@ function buildNodeHostLocalAuthConfig(config: OpenClawConfig): OpenClawConfig {
 }
 
 export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
-  // Operator-approved startup is a second authorized entry point for Doctor-owned
-  // state migrators. Runtime invokes those owners here and never migrates inline.
-  await runStartupMigrations({ log: { info: writeStderrLine, warn: writeStderrLine } });
+  ensureNodeHostStateReady();
   const cfg = getRuntimeConfig();
   const savedConfig = await loadNodeHostConfig();
   const plannedGateway: NodeHostGatewayConfig = {

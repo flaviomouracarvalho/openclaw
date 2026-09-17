@@ -11,7 +11,7 @@ describes each migration source and what to do when one stays blocked.
 
 ## Legacy state migration
 
-`openclaw doctor --fix` is the only owner for persistent file-to-SQLite migrations. It validates and claims each recognized source, writes and verifies canonical rows, records a migration receipt, then removes the retired source. Runtime code does not perform lazy imports or fallback reads.
+`openclaw doctor --fix` is the only owner for persistent file-to-SQLite migrations. It validates and claims each recognized source, writes and verifies canonical rows, records a migration receipt, then removes the retired source. Gateway, node-host, and local CLI startup do not perform legacy imports, repair, or fallback reads. They validate readiness and direct unresolved legacy state to Doctor. Normal versioned database opening, native initialization, and recovery of valid current config remain available without running legacy migrations.
 
 Doctor imports recognized legacy workspace setup files during preflight, before
 Workshop migration accesses workspace state. An existing canonical SQLite setup record wins,

@@ -5,7 +5,10 @@ import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { UPGRADE_SURVIVOR_ASSERTION_SCENARIOS } from "../../../lib/upgrade-survivor-policy.mjs";
+import {
+  isChannelPostCoreScenario,
+  UPGRADE_SURVIVOR_ASSERTION_SCENARIOS,
+} from "../../../lib/upgrade-survivor-policy.mjs";
 import { validatePrepublishPluginRegistryArtifact } from "../../../prepublish-plugin-registry-artifact.mjs";
 import { readPluginInstallIndex } from "../plugin-index-sqlite.mjs";
 import { readPostCoreSnapshot } from "./diagnostics.mjs";
@@ -365,6 +368,20 @@ function hasCoverage(coverage) {
   return Boolean(coverage);
 }
 
+function isChannelPostCoreWriterCell() {
+  return (
+    getScenario() === "channel-post-core-restore" &&
+    process.env.OPENCLAW_UPGRADE_SURVIVOR_BASELINE_VERSION === "2026.4.15"
+  );
+}
+
+function isChannelPostCoreCell() {
+  return (
+    isChannelPostCoreScenario(getScenario()) &&
+    process.env.OPENCLAW_UPGRADE_SURVIVOR_BASELINE_VERSION === "2026.4.15"
+  );
+}
+
 function seedState() {
   const stateDir = requireEnv("OPENCLAW_STATE_DIR");
   const workspace = requireEnv("OPENCLAW_TEST_WORKSPACE_DIR");
@@ -378,6 +395,9 @@ function seedState() {
     path.join(workspace, "IDENTITY.md"),
     "# Upgrade Survivor\n\nThis workspace must survive package update and doctor repair.\n",
   );
+  if (isChannelPostCoreCell()) {
+    return;
+  }
   if (scenario === "bootstrap-persona") {
     for (const [fileName, contents] of PERSONA_FILES) {
       write(path.join(workspace, fileName), contents);
@@ -503,7 +523,10 @@ function assertConfigSurvived() {
 
   if (acceptsIntent(coverage, "update")) {
     const expectedChannel =
-      process.env.OPENCLAW_UPGRADE_SURVIVOR_UPDATE_CHANNEL ||
+      (isChannelPostCoreWriterCell() &&
+      process.env.OPENCLAW_UPGRADE_SURVIVOR_ASSERT_STAGE !== "baseline"
+        ? "beta"
+        : process.env.OPENCLAW_UPGRADE_SURVIVOR_UPDATE_CHANNEL) ||
       (scenario === "prerelease-plugin-registry" ? "beta" : "stable");
     assert(
       expectedChannel === "stable" || expectedChannel === "beta",
@@ -625,7 +648,18 @@ function assertConfigSurvived() {
     }
   }
 
-  if (scenario === "channel-post-core-restore") {
+  if (isChannelPostCoreScenario(scenario)) {
+    if (isChannelPostCoreCell()) {
+      assert(config.plugins?.enabled === true, "post-core restore disabled plugins");
+      assert(
+        config.plugins?.entries?.whatsapp?.enabled === true,
+        "post-core restore disabled WhatsApp plugin",
+      );
+      assert(
+        config.plugins?.allow?.includes("whatsapp"),
+        "post-core restore dropped WhatsApp allow entry",
+      );
+    }
     const whatsapp = config.channels?.whatsapp;
     assert(whatsapp?.enabled === true, "post-core channel restore dropped WhatsApp");
     assert(
@@ -675,6 +709,9 @@ function assertStateSurvived() {
     return;
   }
   assert(fs.existsSync(path.join(workspace, "IDENTITY.md")), "workspace identity file missing");
+  if (isChannelPostCoreCell()) {
+    return;
+  }
   if (scenario === "watchos-direct-node" || scenario === "mobile-pairing-reconnect") {
     return;
   }
@@ -2006,7 +2043,10 @@ if (command === "list-scenarios") {
     legacyOperator.assertLegacyOperatorApprovals(
       process.env.OPENCLAW_UPGRADE_SURVIVOR_ASSERT_STAGE || "survival",
     );
-  } else if (!["watchos-direct-node", "mobile-pairing-reconnect"].includes(getScenario())) {
+  } else if (
+    !isChannelPostCoreCell() &&
+    !["watchos-direct-node", "mobile-pairing-reconnect"].includes(getScenario())
+  ) {
     assertExecApprovalPolicySurvived(
       requireEnv("OPENCLAW_STATE_DIR"),
       process.env.OPENCLAW_UPGRADE_SURVIVOR_ASSERT_STAGE || "survival",
@@ -2018,6 +2058,43 @@ if (command === "list-scenarios") {
   seedUpgradeVolume(stateDir);
 } else if (command === "assert-config") {
   assertConfigSurvived();
+} else if (command === "capture-channel-post-core-config") {
+  const { captureChannelPostCoreConfig } = await import("./channel-post-core-witness.mjs");
+  captureChannelPostCoreConfig();
+} else if (command === "seed-channel-post-core-node-host") {
+  const { seedChannelPostCoreNodeHost } = await import("./channel-post-core-state.mjs");
+  seedChannelPostCoreNodeHost();
+} else if (command === "assert-channel-post-core-writer") {
+  const { assertChannelPostCoreWriterWitness } = await import("./channel-post-core-witness.mjs");
+  const [candidateVersion, observationRoot, updateOutcome, updateRepairRequired] =
+    process.argv.slice(3);
+  assertChannelPostCoreWriterWitness({
+    candidateVersion,
+    observationRoot,
+    updateOutcome,
+    updateRepairRequired,
+  });
+} else if (command === "assert-channel-post-core-readiness") {
+  const { assertChannelPostCoreReadinessWitness } = await import("./channel-post-core-witness.mjs");
+  assertChannelPostCoreReadinessWitness({
+    candidateVersion: process.argv[3],
+    observationRoot: process.argv[4],
+    updateOutcome: process.argv[5],
+    updateRepairRequired: process.argv[6],
+  });
+} else if (command === "prepare-channel-post-core-config-validation") {
+  const { prepareChannelPostCoreConfigValidation } =
+    await import("./channel-post-core-witness.mjs");
+  process.stdout.write(`${prepareChannelPostCoreConfigValidation()}\n`);
+} else if (command === "assert-channel-post-core-config-validation") {
+  const { assertChannelPostCoreConfigValidation } = await import("./channel-post-core-witness.mjs");
+  assertChannelPostCoreConfigValidation(Number(process.argv[3]));
+} else if (command === "seed-channel-post-core-voicewake") {
+  const { seedChannelPostCoreVoiceWake } = await import("./channel-post-core-state.mjs");
+  seedChannelPostCoreVoiceWake();
+} else if (command === "assert-channel-post-core-voicewake") {
+  const { assertChannelPostCoreVoiceWake } = await import("./channel-post-core-state.mjs");
+  assertChannelPostCoreVoiceWake(process.argv[3]);
 } else if (command === "assert-restart-serving-turn") {
   await assertRestartServingTurn(process.argv[3]);
 } else if (command === "assert-state") {

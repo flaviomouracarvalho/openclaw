@@ -30,7 +30,6 @@ import { shouldDeferConfiguredPluginInstallRepair } from "./doctor/shared/update
 export function createDoctorPluginMigrationPreparation(params: {
   enabled: boolean;
   env: () => NodeJS.ProcessEnv;
-  beforePersistentEffect: () => void;
   report: (result: MigrationMessages) => void;
   recordReceipt: (receipt: LegacyStateMigrationStepReceipt) => void;
   measure: ConfigSnapshotReadMeasure;
@@ -142,7 +141,6 @@ export function createDoctorPluginMigrationPreparation(params: {
     pending: readonly DeferredPluginMigration[],
     resolvedPluginIds?: readonly string[],
   ) => {
-    params.beforePersistentEffect();
     try {
       const committed = recordDeferredPluginMigrations({
         env: params.env(),

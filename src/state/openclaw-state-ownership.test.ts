@@ -6,7 +6,6 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { runDoctorConfigPreflight } from "../commands/doctor-config-preflight.js";
 import { runDoctorStateSqliteCompact } from "../commands/doctor-state-sqlite-compact.js";
-import { planPristineStartupStateMigrations } from "../commands/doctor/shared/pristine-startup-state.js";
 import {
   readConfigHealthStateFromStore,
   patchConfigHealthEntryToStore,
@@ -229,16 +228,8 @@ describe("external shared-state ownership", () => {
     fs.mkdirSync(stateDir, { recursive: true });
     fs.writeFileSync(configPath, "{}\n");
 
-    expect(planPristineStartupStateMigrations(env)).toEqual({
-      skipAllStateMigrations: true,
-      skipCoreStateMigrations: true,
-    });
     await assertOpenClawStateWriteAllowedAtPath({ databasePath, env });
     expect(fs.readdirSync(stateDir)).toEqual(["openclaw.json"]);
-    expect(planPristineStartupStateMigrations(env)).toEqual({
-      skipAllStateMigrations: true,
-      skipCoreStateMigrations: true,
-    });
   });
 
   it("preserves ordinary unowned database behavior", () => {
@@ -248,14 +239,11 @@ describe("external shared-state ownership", () => {
     expect(inspectOpenClawStateOwnershipAtPath(database.path)).toBeNull();
   });
 
-  it("checks Doctor startup admission without staging a public snapshot", async () => {
+  it("refuses unauthorized Doctor admission before staging a public snapshot", async () => {
     const fixture = claimFixture();
     const home = tempDirs.make("openclaw-state-ownership-doctor-");
     const snapshotStaging = vi.spyOn(sqliteReadonlyLocation, "prepareSqliteReadOnlyLocationSync");
-    const runPreflight = async (
-      env: NodeJS.ProcessEnv,
-      skipPristineStartupStateMigrations: boolean,
-    ) =>
+    const runPreflight = async (env: NodeJS.ProcessEnv) =>
       await withEnvAsync(
         {
           HOME: home,
@@ -270,15 +258,12 @@ describe("external shared-state ownership", () => {
             migrateLegacyConfig: false,
             migrateState: true,
             observe: false,
-            skipPristineStartupStateMigrations,
           }),
       );
     try {
-      await expect(runPreflight(fixture.unmarkedEnv, false)).rejects.toThrow(
-        OpenClawStateOwnershipError,
-      );
-      await expect(runPreflight(fixture.externalEnv, true)).resolves.toBeDefined();
+      await expect(runPreflight(fixture.unmarkedEnv)).rejects.toThrow(OpenClawStateOwnershipError);
       expect(snapshotStaging).not.toHaveBeenCalled();
+      await expect(runPreflight(fixture.externalEnv)).resolves.toBeDefined();
     } finally {
       snapshotStaging.mockRestore();
     }

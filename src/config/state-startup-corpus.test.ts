@@ -9,6 +9,7 @@ import { acquireReadOnlyPreparedModelRuntime } from "../agents/prepared-model-ru
 import { runDoctorConfigPreflight } from "../commands/doctor-config-preflight.js";
 import { applyLegacyCompatibilityStep } from "../commands/doctor/shared/config-flow-steps.js";
 import { normalizeCompatibilityConfigValues } from "../commands/doctor/shared/legacy-config-core-migrate.js";
+import { runStartupConfigPreflight } from "../commands/startup-config-preflight.js";
 import { loadCronJobsStore, resolveCronJobsStorePathFromConfig } from "../cron/store.js";
 import { loadGatewayStartupConfigSnapshot } from "../gateway/server-startup-config-helpers.js";
 import { runStartupSessionMigration } from "../gateway/server-startup-session-migration.js";
@@ -202,9 +203,9 @@ describe("prior-release state startup corpus", () => {
             doctorOnlyStateMigrations: true,
             preparePluginMetadataSnapshot: true,
           });
-          await runDoctorConfigPreflight({
+          await runStartupConfigPreflight({
+            gateway: true,
             observe: false,
-            requireStartupMigrationCheckpoint: true,
           });
           const startup = await loadGatewayStartupConfigSnapshot({
             initialSnapshotRead: await io.readConfigFileSnapshotWithPluginMetadata(),

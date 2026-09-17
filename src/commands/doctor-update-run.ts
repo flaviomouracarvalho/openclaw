@@ -1,14 +1,8 @@
 import { note } from "../../packages/terminal-core/src/note.js";
 import { UPDATE_ACTIVATION_TIMEOUT_REASON } from "../shared/update-outcome.js";
 
-/** Startup and proven-pristine preflights do not need a public ledger snapshot. */
-export async function noteStaleUpdateRuns(options: {
-  requireStartupMigrationCheckpoint?: boolean;
-  skipPristineStartupStateMigrations?: boolean;
-}): Promise<void> {
-  if (options.requireStartupMigrationCheckpoint || options.skipPristineStartupStateMigrations) {
-    return;
-  }
+/** Report unfinished or failed update work during Doctor diagnostics. */
+export async function noteStaleUpdateRuns(): Promise<void> {
   const [
     { staleUpdateRunGuidance },
     { listUpdateRunsAsync },

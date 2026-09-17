@@ -284,9 +284,13 @@ still use them. `openclaw update` still runs Doctor after installing the candida
 after a manual package replacement, run `openclaw doctor --fix` before restarting
 the Gateway.
 
+The fresh post-core continuation runs repairing Doctor before plugin convergence,
+including when an older updater already ran Doctor without `--fix`. This completes
+pending legacy state even when the configuration itself needs no repair.
+
 `OPENCLAW_DISABLE_BUNDLED_PLUGIN_POSTINSTALL=1` skips package-local postinstall
-cleanup, but still completes the lifecycle marker. It does not disable Doctor or
-Gateway startup migrations.
+cleanup, but still completes the lifecycle marker. Doctor migrations remain
+enabled.
 
 <Warning>
 Older packages, including `2026.8.1`, can migrate the state database during

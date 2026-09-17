@@ -1,4 +1,5 @@
 export const UPGRADE_SURVIVOR_ASSERTION_SCENARIOS: readonly string[];
+export function isChannelPostCoreScenario(scenario: unknown): boolean;
 export function isTrustedHarnessOwnedUpgradeSurvivorScenario(scenario: string): boolean;
 export function normalizeUpgradeSurvivorBaselineSpec(raw: string | undefined): string | undefined;
 export function parseUpgradeSurvivorBaselineSpecs(raw: string | undefined): string[];

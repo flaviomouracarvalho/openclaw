@@ -252,6 +252,11 @@ validate_update_restart_mode() {
       return 1
       ;;
   esac
+  normalize_baseline
+  if [ "$SCENARIO" = "channel-post-core-readiness" ] && [ "$baseline_spec" != "openclaw@2026.4.15" ]; then
+    echo "channel-post-core-readiness requires the published 2026.4.15 baseline" >&2
+    return 1
+  fi
   if [ "$SCENARIO" = "workshop-doctor-recovery" ] && {
     [ "$LIVE_OPENAI" != "0" ] || [ "$ROOT_MANAGED_VPS" != "0" ] ||
     [ "$UPDATE_RESTART_MODE" != "manual" ] || [ "$CANDIDATE_KIND" != "tarball" ];
@@ -259,6 +264,23 @@ validate_update_restart_mode() {
     echo "workshop-doctor-recovery requires a candidate tarball, manual restart, and no live provider or managed VPS" >&2
     return 1
   fi
+  if channel_post_core_cell && {
+    [ "$LIVE_OPENAI" != "0" ] || [ "$ROOT_MANAGED_VPS" != "0" ] ||
+    [ "$UPDATE_RESTART_MODE" != "manual" ] || [ "$CANDIDATE_KIND" != "tarball" ];
+  }; then
+    echo "The published post-core witness requires a candidate tarball, manual restart, and no live provider or managed VPS" >&2
+    return 1
+  fi
+}
+
+channel_post_core_writer_cell() {
+  [ "$SCENARIO" = "channel-post-core-restore" ] && [ "$baseline_version" = "2026.4.15" ]
+}
+
+channel_post_core_cell() {
+  {
+    [ "$SCENARIO" = "channel-post-core-restore" ] || [ "$SCENARIO" = "channel-post-core-readiness" ]
+  } && [ "$baseline_version" = "2026.4.15" ]
 }
 
 json_event() {
@@ -312,6 +334,7 @@ write_summary() {
     SUMMARY_RESTART_RUNTIME_FIXTURE="$restart_runtime_evidence" \
     SUMMARY_RESTART_INFERENCE="$restart_inference" \
     SUMMARY_BACKUP_ROLLBACK="$ARTIFACT_ROOT/backup-rollback.json" \
+    SUMMARY_CHANNEL_POST_CORE_PARENT="$ARTIFACT_ROOT/channel-post-core-parent.json" \
     node --input-type=module <<'NODE'
 import fs from "node:fs";
 import path from "node:path";
@@ -345,6 +368,13 @@ const summary = {
     version: process.env.SUMMARY_BASELINE_VERSION || null,
   },
   scenario: process.env.SUMMARY_SCENARIO || "base",
+  ...(["channel-post-core-restore", "channel-post-core-readiness"].includes(process.env.SUMMARY_SCENARIO) &&
+      process.env.SUMMARY_BASELINE_VERSION === "2026.4.15"
+    ? { channelPostCoreProcesses: {
+        availability: fs.existsSync(process.env.SUMMARY_CHANNEL_POST_CORE_PARENT) ? "captured" : "unknown",
+        observations: readJsonOrNull(process.env.SUMMARY_CHANNEL_POST_CORE_PARENT)?.observations ?? [],
+      } }
+    : {}),
   candidate: {
     kind: process.env.OPENCLAW_UPGRADE_SURVIVOR_CANDIDATE_KIND || null,
     spec: process.env.OPENCLAW_UPGRADE_SURVIVOR_CANDIDATE_SPEC || process.env.OPENCLAW_CURRENT_PACKAGE_TGZ || null,
@@ -936,7 +966,6 @@ reset_run_state() {
 }
 
 install_baseline() {
-  normalize_baseline
   echo "Installing baseline package: $baseline_spec"
   if ! openclaw_prepublish_plugin_registry_run_published openclaw_e2e_maybe_timeout "${OPENCLAW_E2E_NPM_INSTALL_TIMEOUT:-600s}" npm install -g --prefix "$npm_config_prefix" "$baseline_spec" --no-fund --no-audit >"$BASELINE_INSTALL_LOG" 2>&1; then
     echo "baseline npm install failed" >&2
@@ -1444,6 +1473,9 @@ update_candidate() {
     previous_systemctl_lines="$(wc -l <"$SYSTEMCTL_SHIM_LOG")"
   fi
   local update_args=(update --tag "$update_spec" --yes --json)
+  if channel_post_core_writer_cell; then
+    update_args+=(--channel beta)
+  fi
   local update_env=(
     env
     -u OPENCLAW_GATEWAY_TOKEN
@@ -1680,6 +1712,30 @@ run_doctor() {
     openclaw_e2e_print_log "$DOCTOR_LOG" >&2
     return 1
   fi
+}
+
+prepare_channel_post_core_gateway_auth() {
+  openclaw_e2e_maybe_timeout "$COMMAND_TIMEOUT" openclaw config set gateway.auth \
+    '{"mode":"token","token":{"source":"env","provider":"default","id":"GATEWAY_AUTH_TOKEN_REF"}}' \
+    --strict-json >"$ARTIFACT_ROOT/channel-post-core-auth.out" 2>"$ARTIFACT_ROOT/channel-post-core-auth.err"
+}
+
+validate_channel_post_core_original_config() {
+  local copy_path validation_exit=0
+  copy_path="$(node scripts/e2e/lib/upgrade-survivor/assertions.mjs prepare-channel-post-core-config-validation)" || return "$?"
+  openclaw_e2e_maybe_timeout "$COMMAND_TIMEOUT" env OPENCLAW_CONFIG_PATH="$copy_path" \
+    openclaw config validate --json >"$ARTIFACT_ROOT/channel-post-core-config-validation.json" \
+    2>"$ARTIFACT_ROOT/channel-post-core-config-validation.err" || validation_exit=$?
+  node scripts/e2e/lib/upgrade-survivor/assertions.mjs assert-channel-post-core-config-validation "$validation_exit"
+}
+
+start_channel_post_core_gateway() {
+  local stage="$1" gateway_status=0
+  GATEWAY_LOG="$ARTIFACT_ROOT/channel-post-core-${stage}-gateway.log"
+  start_gateway || gateway_status=$?
+  # Preserve measured state even if readiness failed before an RPC could run.
+  node scripts/e2e/lib/upgrade-survivor/assertions.mjs assert-channel-post-core-voicewake "$stage" || return "$?"
+  return "$gateway_status"
 }
 
 prepare_restart_inference() {
@@ -2264,8 +2320,46 @@ if [ "$SCENARIO" = "legacy-operator-state" ]; then
     seed-legacy-operator-external-plugin
 fi
 run_missing_load_path_fixture unavailable
+if channel_post_core_cell; then
+  phase seed-published-parent-node-host node scripts/e2e/lib/upgrade-survivor/assertions.mjs \
+    seed-channel-post-core-node-host
+  phase capture-published-parent-input node scripts/e2e/lib/upgrade-survivor/assertions.mjs \
+    capture-channel-post-core-config
+fi
 phase update-candidate update_candidate_for_install_mode
 run_missing_load_path_fixture post-update
+if channel_post_core_cell; then
+  # A standalone Doctor must never hide a failed published-parent handoff.
+  parent_witness=assert-channel-post-core-writer
+  if [ "$SCENARIO" = "channel-post-core-readiness" ]; then
+    parent_witness=assert-channel-post-core-readiness
+  fi
+  phase assert-published-parent node scripts/e2e/lib/upgrade-survivor/assertions.mjs \
+    "$parent_witness" "$candidate_version" "$initial_update_observation_root" \
+    "$update_outcome" "$update_repair_required"
+  phase validate-original-config-copy validate_channel_post_core_original_config
+  phase validate-published-parent-config validate_post_doctor_config
+  phase assert-published-parent-whatsapp assert_survival
+  phase prepare-channel-gateway-auth prepare_channel_post_core_gateway_auth
+  phase seed-channel-voicewake node scripts/e2e/lib/upgrade-survivor/assertions.mjs seed-channel-post-core-voicewake
+  phase gateway-start start_channel_post_core_gateway startup
+  phase gateway-probes check_gateway_probes
+  phase gateway-status check_gateway_status
+  phase gateway-stop stop_gateway
+  phase doctor run_doctor
+  phase assert-explicit-doctor-import node scripts/e2e/lib/upgrade-survivor/assertions.mjs assert-channel-post-core-voicewake doctor
+  phase gateway-restart start_channel_post_core_gateway restarted
+  phase gateway-restart-probes check_gateway_probes
+  phase gateway-restart-status check_gateway_status
+  phase assert-restarted-whatsapp assert_survival
+  run_completed="1"
+  if channel_post_core_writer_cell; then
+    echo "Upgrade survivor Docker E2E passed baseline=${baseline_spec} scenario=${SCENARIO} candidate=${candidate_version}: published config writeback and node-host Doctor import, ordinary readiness, and explicit voice-wake Doctor."
+  else
+    echo "Upgrade survivor Docker E2E passed baseline=${baseline_spec} scenario=${SCENARIO} candidate=${candidate_version}: same-channel node-host Doctor handoff, ordinary readiness, and explicit voice-wake Doctor. Changed-channel CAS/writeback was not exercised."
+  fi
+  exit 0
+fi
 if [ "$SCENARIO" = "legacy-operator-state" ]; then
   phase assert-formerly-bundled-plugin node scripts/e2e/lib/upgrade-survivor/assertions.mjs \
     assert-npm-plugin-install duckduckgo @openclaw/duckduckgo-plugin "$candidate_version" 1

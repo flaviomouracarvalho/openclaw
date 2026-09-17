@@ -158,7 +158,7 @@ describe("runDoctorConfigPreflight state migration input", () => {
     );
   });
 
-  it("does not skip a retired custom cron partition on a pristine state root", async () => {
+  it("preserves a retired custom cron partition with invalid Gateway config", async () => {
     const sourceConfig = {
       gateway: { mode: "local", port: "not-a-port" },
       agents: {
@@ -190,7 +190,6 @@ describe("runDoctorConfigPreflight state migration input", () => {
     await runDoctorConfigPreflight({
       migrateLegacyConfig: false,
       invalidConfigNote: false,
-      skipPristineCoreStateMigrations: true,
     });
 
     expect(repairLegacyCronStoreWithoutPrompt).toHaveBeenCalledWith({

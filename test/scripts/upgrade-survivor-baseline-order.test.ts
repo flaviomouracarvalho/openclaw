@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { chmodSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path, { delimiter, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterEach, expect, it } from "vitest";
@@ -8,6 +8,231 @@ import { readUpgradeSurvivorPaths } from "./upgrade-survivor-paths.test-support.
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const runner = path.resolve("scripts/e2e/lib/upgrade-survivor/run.sh");
+
+function postCorePredicates(source: string) {
+  return source.match(/^channel_post_core_(?:writer_cell|cell)\(\) \{[\s\S]*?^\}/gmu)?.join("\n");
+}
+
+it.each([
+  ["openclaw@2026.4.15", "tarball", "manual", "0", "", "install-baseline"],
+  [" 2026.4.15 ", "tarball", "manual", "0", "", "install-baseline"],
+  ["openclaw@2026.4.29", "tarball", "manual", "0", "", "validate-update-restart-mode"],
+  ["openclaw@2026.4.15", "npm", "manual", "0", "", "validate-update-restart-mode"],
+  ["openclaw@2026.4.15", "tarball", "auto-auth", "0", "", "validate-update-restart-mode"],
+  ["openclaw@2026.4.15", "tarball", "manual", "1", "", "validate-update-restart-mode"],
+  ["openclaw@2026.4.15", "tarball", "manual", "0", "2026.4.29", "install-baseline"],
+])(
+  "admits the same-channel request through the real runner (%s/%s/%s/live=%s/installed=%s)",
+  (baseline, kind, mode, live, installedVersion, expectedPhase) => {
+    const root = tempDirs.make("survivor-readiness-admission-");
+    const bin = join(root, "bin");
+    const artifacts = join(root, "artifacts");
+    const calls = join(root, "npm-calls.jsonl");
+    mkdirSync(bin);
+    writeFileSync(
+      join(bin, "npm"),
+      `#!${process.execPath}
+const fs = require("node:fs");
+const path = require("node:path");
+const args = process.argv.slice(2);
+fs.appendFileSync(process.env.PROBE_NPM_CALLS, JSON.stringify(args) + "\\n");
+if (args[0] === "root" && args[1] === "-g") {
+  process.stdout.write(path.join(process.env.npm_config_prefix, "lib", "node_modules"));
+  process.exit(0);
+}
+if (!process.env.PROBE_INSTALLED_VERSION) process.exit(17);
+const prefix = args[args.indexOf("--prefix") + 1];
+const packageRoot = path.join(prefix, "lib", "node_modules", "openclaw");
+fs.mkdirSync(packageRoot, { recursive: true });
+fs.writeFileSync(path.join(packageRoot, "package.json"), JSON.stringify({ name: "openclaw", version: process.env.PROBE_INSTALLED_VERSION }));
+fs.mkdirSync(path.join(prefix, "bin"), { recursive: true });
+fs.writeFileSync(path.join(prefix, "bin", "openclaw"), "#!/bin/sh\\nexit 31\\n", { mode: 0o755 });
+`,
+      { mode: 0o755 },
+    );
+    const result = spawnSync("bash", [runner], {
+      encoding: "utf8",
+      env: {
+        PATH: `${bin}${delimiter}${process.env.PATH ?? ""}`,
+        HOME: root,
+        TMPDIR: join(root, "runtime", "tmp"),
+        OPENAI_API_KEY: "synthetic-admission-fixture",
+        PROBE_NPM_CALLS: calls,
+        PROBE_INSTALLED_VERSION: installedVersion,
+        OPENCLAW_UPGRADE_SURVIVOR_BASELINE: baseline,
+        OPENCLAW_UPGRADE_SURVIVOR_SCENARIO: "channel-post-core-readiness",
+        OPENCLAW_UPGRADE_SURVIVOR_CANDIDATE_KIND: kind,
+        OPENCLAW_UPGRADE_SURVIVOR_UPDATE_RESTART_MODE: mode,
+        OPENCLAW_UPGRADE_SURVIVOR_LIVE_OPENAI: live,
+        OPENCLAW_UPGRADE_SURVIVOR_ROOT_MANAGED_VPS: "0",
+        OPENCLAW_UPGRADE_SURVIVOR_RUNTIME_ROOT: join(root, "runtime"),
+        OPENCLAW_UPGRADE_SURVIVOR_SUMMARY_JSON: join(artifacts, "summary.json"),
+      },
+    });
+    expect(result.status, result.stdout + result.stderr).toBe(1);
+    const summary = JSON.parse(readFileSync(join(artifacts, "summary.json"), "utf8"));
+    expect(summary.failure.phase).toBe(expectedPhase);
+    if (expectedPhase === "install-baseline") {
+      const npmCalls: string[][] = readFileSync(calls, "utf8")
+        .trim()
+        .split("\n")
+        .map((line) => JSON.parse(line));
+      expect(npmCalls.filter((args) => args[0] === "install")).toEqual([
+        [
+          "install",
+          "-g",
+          "--prefix",
+          join(artifacts, "npm-prefix"),
+          "openclaw@2026.4.15",
+          "--no-fund",
+          "--no-audit",
+        ],
+      ]);
+      expect(summary.phases).toContainEqual(
+        expect.objectContaining({ phase: "validate-update-restart-mode", status: "passed" }),
+      );
+      if (installedVersion) {
+        expect(result.stdout + result.stderr).toContain(
+          "baseline package version mismatch: expected 2026.4.15, got 2026.4.29",
+        );
+      }
+    } else {
+      expect(existsSync(calls)).toBe(false);
+      expect(
+        summary.phases.some((phase: { phase: string }) => phase.phase === "install-baseline"),
+      ).toBe(false);
+    }
+  },
+);
+
+it.each([
+  { scenario: "channel-post-core-restore", baseline: "2026.4.15", channel: true },
+  { scenario: "channel-post-core-readiness", baseline: "2026.4.15", channel: false },
+  { scenario: "channel-post-core-restore", baseline: "2026.4.29", channel: false },
+  { scenario: "base", baseline: "2026.4.15", channel: false },
+])(
+  "selects the published channel writer only for $scenario × $baseline",
+  ({ scenario, baseline, channel }) => {
+    const source = readFileSync(runner, "utf8");
+    const predicate = postCorePredicates(source);
+    const start = source.indexOf("  local update_args=(update --tag");
+    const setup = source.slice(start, source.indexOf("  local update_node_options=", start));
+    expect(predicate).toBeTruthy();
+    expect(start).toBeGreaterThan(-1);
+    const result = spawnSync(
+      "bash",
+      [
+        "-c",
+        `set -eu
+SCENARIO="$1"
+baseline_version="$2"
+update_spec=/tmp/candidate.tgz
+verify_restart=0
+ROOT_MANAGED_VPS=0
+${predicate}
+capture() {
+${setup}
+printf '%s\\0' "\${update_args[@]}"
+}
+capture
+`,
+        "survivor-update-argv",
+        scenario,
+        baseline,
+      ],
+      { encoding: "utf8" },
+    );
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stdout.split("\0").filter(Boolean)).toEqual([
+      "update",
+      "--tag",
+      "/tmp/candidate.tgz",
+      "--yes",
+      "--json",
+      ...(channel ? ["--channel", "beta"] : []),
+      "--no-restart",
+    ]);
+  },
+);
+
+it.each([
+  { scenario: "channel-post-core-restore", fail: false },
+  { scenario: "channel-post-core-restore", fail: true },
+  { scenario: "channel-post-core-readiness", fail: false },
+  { scenario: "channel-post-core-readiness", fail: true },
+])(
+  "keeps standalone Doctor after the $scenario parent witness (failure=$fail)",
+  ({ scenario, fail }) => {
+    const source = readFileSync(runner, "utf8");
+    const predicate = postCorePredicates(source);
+    const start = source.indexOf(
+      "if channel_post_core_cell; then\n  phase seed-published-parent-node-host",
+    );
+    const flow = source.slice(
+      start,
+      source.indexOf('if [ "$SCENARIO" = "legacy-operator-state" ]; then', start),
+    );
+    expect(predicate).toBeTruthy();
+    expect(start).toBeGreaterThan(-1);
+    const result = spawnSync(
+      "bash",
+      [
+        "-c",
+        `set -eu
+source scripts/e2e/lib/upgrade-survivor/missing-load-path.sh
+SCENARIO="$1"
+baseline_version=2026.4.15
+baseline_spec=openclaw@2026.4.15
+candidate_version=2026.9.5
+initial_update_observation_root=/tmp/observations
+update_outcome=success
+update_repair_required=0
+${predicate}
+phase() {
+  printf 'phase:%s\\n' "$1"
+  if [ "$1" = assert-published-parent ]; then printf 'witness:%s\\n' "$4"; fi
+  if [ "$1" = assert-published-parent ] && [ "$FAIL_WITNESS" = 1 ]; then return 37; fi
+}
+${flow}
+`,
+        "survivor-parent-order",
+        scenario,
+      ],
+      {
+        encoding: "utf8",
+        env: { ...process.env, FAIL_WITNESS: fail ? "1" : "0" },
+      },
+    );
+    const phases = result.stdout.split("\n").filter((line) => line.startsWith("phase:"));
+    expect(result.status, result.stderr).toBe(fail ? 37 : 0);
+    const seed = phases.indexOf("phase:seed-published-parent-node-host");
+    const capture = phases.indexOf("phase:capture-published-parent-input");
+    const update = phases.indexOf("phase:update-candidate");
+    expect(seed).toBeGreaterThan(-1);
+    expect(capture).toBeGreaterThan(seed);
+    expect(update).toBeGreaterThan(capture);
+    const witness = phases.indexOf("phase:assert-published-parent");
+    expect(witness).toBeGreaterThan(update);
+    expect(result.stdout).toContain(
+      `witness:assert-channel-post-core-${scenario === "channel-post-core-restore" ? "writer" : "readiness"}`,
+    );
+    if (fail) {
+      expect(phases.at(-1)).toBe("phase:assert-published-parent");
+      expect(phases).not.toContain("phase:doctor");
+    } else {
+      expect(phases.indexOf("phase:validate-original-config-copy")).toBeGreaterThan(witness);
+      expect(phases.indexOf("phase:prepare-channel-gateway-auth")).toBeGreaterThan(witness);
+      expect(phases.indexOf("phase:gateway-start")).toBeGreaterThan(witness);
+      expect(phases.indexOf("phase:doctor")).toBeGreaterThan(phases.indexOf("phase:gateway-stop"));
+      expect(phases.indexOf("phase:doctor")).toBeGreaterThan(
+        phases.indexOf("phase:validate-original-config-copy"),
+      );
+      expect(phases.indexOf("phase:gateway-restart")).toBeGreaterThan(
+        phases.indexOf("phase:doctor"),
+      );
+    }
+  },
+);
 
 it.each([
   { scenario: "legacy-operator-state", mode: "auto-auth" },
@@ -24,6 +249,8 @@ it.each([
     source.indexOf("phase seed-state seed_state"),
     source.indexOf("phase update-candidate update_candidate_for_install_mode"),
   );
+  const writerCell = postCorePredicates(source);
+  expect(writerCell).toBeTruthy();
   const result = spawnSync(
     "bash",
     [
@@ -37,6 +264,7 @@ plugin_registry_pid=synthetic
 NPM_CONFIG_REGISTRY=initial-registry
 manager_registry="$NPM_CONFIG_REGISTRY"
 ${routing}
+${writerCell}
 openclaw_e2e_stop_process() { :; }
 configure_plugin_registry() {
   NPM_CONFIG_REGISTRY="\${1:-candidate}-registry"

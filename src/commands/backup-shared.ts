@@ -39,7 +39,7 @@ import {
   type BackupResourcePlan,
 } from "./backup-resource-inventory.js";
 import { buildCleanupPlan, isPathWithin } from "./cleanup-utils.js";
-import { resolveStartupConfigSnapshot } from "./doctor/shared/automatic-startup-config-repair.js";
+import { resolveLegacyConfigSnapshotForBackup } from "./doctor/shared/automatic-config-repair.js";
 
 // DEFLATE can legitimately encode zero-filled sparse ranges just over 1000:1.
 // Keep bounded headroom without disabling node-tar's decompression bomb guard.
@@ -624,7 +624,7 @@ async function resolveBackupPlanFromState(params: {
   // Backup discovery must not initialize or migrate the state DB before snapshot validation.
   const configRead = await createConfigIO({ observe: false }).readConfigFileSnapshotForWrite();
   const configSnapshot = configRead.snapshot;
-  const discoverySnapshot = resolveStartupConfigSnapshot(configSnapshot) ?? configSnapshot;
+  const discoverySnapshot = resolveLegacyConfigSnapshotForBackup(configSnapshot) ?? configSnapshot;
   const configCapture = await resolveBackupConfigCapture(configRead);
   if (discoverySnapshot.exists && !discoverySnapshot.valid) {
     throw new Error(

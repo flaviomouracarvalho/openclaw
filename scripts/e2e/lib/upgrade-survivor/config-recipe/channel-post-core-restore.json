@@ -1,0 +1,28 @@
+{
+  "update": { "channel": "stable" },
+  "gateway": {
+    "mode": "local",
+    "port": 18789,
+    "bind": "loopback",
+    "reload": { "mode": "off" },
+    "auth": {
+      "mode": "token",
+      "token": { "source": "env", "provider": "default", "id": "GATEWAY_AUTH_TOKEN_REF" }
+    }
+  },
+  "plugins": {
+    "enabled": true,
+    "allow": ["whatsapp"],
+    "entries": { "whatsapp": { "enabled": true } }
+  },
+  "channels": {
+    "whatsapp": {
+      "enabled": true,
+      "dmPolicy": "allowlist",
+      "allowFrom": ["+15555550123"],
+      "groupPolicy": "allowlist",
+      "groupAllowFrom": ["+15555550123"],
+      "groups": { "120363000000000000@g.us": { "requireMention": true } }
+    }
+  }
+}

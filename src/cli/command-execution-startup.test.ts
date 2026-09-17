@@ -131,8 +131,6 @@ describe("command-execution-startup", () => {
       },
       allowInvalid: true,
       loadPlugins: true,
-      skipPristineCoreStateMigrations: true,
-      skipPristineStartupStateMigrations: true,
     });
 
     expect(ensureConfigReadyMock).toHaveBeenLastCalledWith({
@@ -140,8 +138,6 @@ describe("command-execution-startup", () => {
       commandPath: ["message", "send"],
       measure: expect.any(Function),
       allowInvalid: true,
-      skipPristineCoreStateMigrations: true,
-      skipPristineStartupStateMigrations: true,
     });
     expect(ensureCliPluginRegistryLoadedMock).toHaveBeenCalledWith({
       scope: "all",

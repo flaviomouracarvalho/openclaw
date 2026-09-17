@@ -27,7 +27,7 @@ export { clearDeviceAuthTokenFromDatabase } from "./device-auth-store.kernel.js"
 // the entry after its exclusive legacy import removes the retired file.
 const legacyPresenceCache = new Map<string, boolean>();
 
-function assertNoLegacyDeviceAuth(env: NodeJS.ProcessEnv | undefined): void {
+export function assertNoLegacyDeviceAuth(env: NodeJS.ProcessEnv | undefined): void {
   const stateDir = resolveStateDir(env);
   let hasLegacy = legacyPresenceCache.get(stateDir);
   if (hasLegacy === undefined) {

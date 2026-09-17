@@ -587,11 +587,19 @@ update with no continuation does not wake the model to deliver the report.
 
 The sentinel's typed SQLite columns are authoritative for restart handling.
 Its `payload_json` value is a replay/debug shadow only. Runtime reads, writes,
-and clears SQLite state without a file fallback. A bounded state migration runs
-at startup and through Doctor to preserve a validated legacy
-`restart-sentinel.json` left on disk after an update.
-The migration verifies the typed row and removes the source file before normal
-restart handling continues.
+and clears SQLite state without a file fallback. Doctor owns the bounded migration
+of a legacy `restart-sentinel.json` left on disk after an update, applying its
+validation, canonical-row, and migration-receipt checks before handling or retiring
+the source. Gateway startup uses the canonical SQLite state for normal restart
+handling.
+
+Older RPC updaters, including `2026.4.15` and `2026.4.29`, write legacy JSON after
+their update work and schedule a restart without a fresh candidate finalizer.
+That path can complete the update without delivering its restart notice or
+continuation. For a retained legacy file, stop the Gateway and run
+`openclaw doctor --fix` before restarting; inspect Doctor's reported decision.
+A prior migration receipt can retire recreated JSON without replaying it.
+The `2026.6.34` and `2026.9.2` updaters write native SQLite state instead.
 
 ## Safety valves and observability
 

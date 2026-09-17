@@ -2380,7 +2380,6 @@ src/commands/doctor/shared/legacy-web-tools-migrate.ts	1
 src/commands/doctor/shared/open-policy-allowfrom.ts	2
 src/commands/doctor/shared/plugin-runtime-symlinks.ts	4
 src/commands/doctor/shared/plugin-tool-allowlist-warnings.ts	2
-src/commands/doctor/shared/pristine-startup-state.ts	3
 src/commands/doctor/shared/stale-agent-model-ref-repair.ts	3
 src/commands/doctor/shared/stale-auth-order-store.ts	3
 src/commands/doctor/shared/stale-auth-order.ts	4
@@ -2967,7 +2966,6 @@ src/infra/sqlite-snapshot.ts	2
 src/infra/sqlite-strict.ts	7
 src/infra/sqlite-user-version.ts	1
 src/infra/sqlite-wal.ts	4
-src/infra/startup-migration-checkpoint.ts	1
 src/infra/state-migrations.acp-replay.ts	1
 src/infra/state-migrations.audit-backup.ts	1
 src/infra/state-migrations.audit-records.ts	4

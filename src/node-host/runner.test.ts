@@ -19,17 +19,6 @@ import {
 describe("runNodeHost", () => {
   beforeEach(resetRunnerTestState);
 
-  it("runs startup state migrations before constructing node-host state", async () => {
-    await expect(runNodeHost({ gatewayHost: "127.0.0.1", gatewayPort: 18789 })).rejects.toThrow(
-      "event loop readiness timeout",
-    );
-
-    expect(mocks.runStartupMigrations).toHaveBeenCalledTimes(1);
-    expect(mocks.runStartupMigrations.mock.invocationCallOrder[0]).toBeLessThan(
-      mocks.configureNodeHost.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
-    );
-  });
-
   it("forwards an explicit full-surface reset to the durable config owner", async () => {
     await expect(
       runNodeHost({ gatewayHost: "127.0.0.1", gatewayPort: 18789, allCommands: true }),

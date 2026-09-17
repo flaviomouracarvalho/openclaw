@@ -2415,6 +2415,7 @@ await import('./scripts/check-docker-e2e-boundaries.mts');`,
   });
 
   it("derives prerelease npm companions from selected survivor recipes", () => {
+    const commonPackages = ["@openclaw/codex", "@openclaw/discord", "@openclaw/whatsapp"];
     for (const laneName of [
       "upgrade-survivor",
       "published-upgrade-survivor",
@@ -2423,35 +2424,28 @@ await import('./scripts/check-docker-e2e-boundaries.mts');`,
       "update-migration",
     ]) {
       const plan = planFor({ selectedLaneNames: [laneName] });
-      expect(plan.requiredPrepublishPluginPackages).toEqual([
-        "@openclaw/codex",
-        "@openclaw/discord",
-        "@openclaw/whatsapp",
-      ]);
+      expect(plan.requiredPrepublishPluginPackages).toEqual(commonPackages);
       expect(plan.needs.prepublishPluginRegistry).toBe(true);
     }
 
-    const feishuPlan = planFor({
-      selectedLaneNames: ["published-upgrade-survivor"],
-      upgradeSurvivorBaselines: "2026.7.2",
-      upgradeSurvivorScenarios: "base feishu-channel",
-    });
-    expect(feishuPlan.requiredPrepublishPluginPackages).toEqual([
-      "@openclaw/codex",
-      "@openclaw/discord",
-      "@openclaw/feishu",
-      "@openclaw/whatsapp",
-    ]);
-    const legacyFeishuPlan = planFor({
-      selectedLaneNames: ["published-upgrade-survivor"],
-      upgradeSurvivorBaselines: "2026.3.13",
-      upgradeSurvivorScenarios: "feishu-channel",
-    });
-    expect(legacyFeishuPlan.requiredPrepublishPluginPackages).toEqual([
-      "@openclaw/codex",
-      "@openclaw/discord",
-      "@openclaw/whatsapp",
-    ]);
+    for (const [baseline, scenarios, packages] of [
+      [
+        "2026.7.2",
+        "base feishu-channel",
+        ["@openclaw/codex", "@openclaw/discord", "@openclaw/feishu", "@openclaw/whatsapp"],
+      ],
+      ["2026.3.13", "feishu-channel", commonPackages],
+      ["2026.4.15", "channel-post-core-restore", ["@openclaw/whatsapp"]],
+      ["2026.4.29", "channel-post-core-restore", commonPackages],
+      ["2026.4.15", "base", commonPackages],
+    ] as const) {
+      const plan = planFor({
+        selectedLaneNames: ["published-upgrade-survivor"],
+        upgradeSurvivorBaselines: baseline,
+        upgradeSurvivorScenarios: scenarios,
+      });
+      expect(plan.requiredPrepublishPluginPackages, `${baseline}: ${scenarios}`).toEqual(packages);
+    }
     const selfUpgradeLane = findLaneByName("update-run-package-self-upgrade");
     expect(selfUpgradeLane).toBeDefined();
     expect(requiredPrepublishPluginPackagesForLanes([selfUpgradeLane!])).toEqual([]);
