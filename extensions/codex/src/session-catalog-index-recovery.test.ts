@@ -345,7 +345,9 @@ describe("resident Codex catalog recovery", () => {
         await nextTurn();
         const refreshedStatus = {
           ...current,
-          sessions: current.sessions.map((session) => ({ ...session, status: "idle" })),
+          sessions: current.sessions.map((session) =>
+            Object.assign({}, session, { status: "idle" }),
+          ),
         };
         expect(await index.list({})).toEqual(refreshedStatus);
         await index.reconcile();

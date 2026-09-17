@@ -20,8 +20,11 @@ export function codexCatalogSourceForClient(client: object): CodexCatalogSource 
 export function closeCodexCatalogClientSource(client: object): void {
   const { clients } = getSources();
   const source = clients.get(client);
-  if (source) source.closed = true;
-  else clients.set(client, { closed: true });
+  if (source) {
+    source.closed = true;
+  } else {
+    clients.set(client, { closed: true });
+  }
 }
 
 export function getCodexCatalogSource(value: unknown): CodexCatalogSource | undefined {
@@ -32,7 +35,9 @@ export function setCodexCatalogSource<T extends object>(
   value: T,
   source: CodexCatalogSource | undefined,
 ): T {
-  if (source) getSources().values.set(value, source);
+  if (source) {
+    getSources().values.set(value, source);
+  }
   return value;
 }
 
@@ -47,11 +52,15 @@ export function recordCodexCatalogResponseSource(
   result: unknown,
   source: CodexCatalogSource,
 ): void {
-  if (result === null || typeof result !== "object") return;
+  if (result === null || typeof result !== "object") {
+    return;
+  }
   if (method === "thread/list" && "data" in result && Array.isArray(result.data)) {
     setCodexCatalogSource(result, source);
     for (const thread of result.data) {
-      if (thread !== null && typeof thread === "object") setCodexCatalogSource(thread, source);
+      if (thread !== null && typeof thread === "object") {
+        setCodexCatalogSource(thread, source);
+      }
     }
   } else if (
     (method === "thread/read" ||

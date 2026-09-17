@@ -78,7 +78,9 @@ it.each([false, true])(
         if (request.method === "thread/start") {
           expect(request.params.ephemeral).toBe(true);
           // Existing rows exercise completion refresh, independent of the start payload.
-          if (!existing) send({ method: "thread/started", params: { thread: native.thread } });
+          if (!existing) {
+            send({ method: "thread/started", params: { thread: native.thread } });
+          }
         }
         send({ id: request.id, result: responses[request.method] });
         if (request.method === "turn/start") {
@@ -93,7 +95,9 @@ it.each([false, true])(
     });
     vi.spyOn(sharedClient, "createIsolatedCodexAppServerClient").mockImplementation(
       async (options) => {
-        if (!options?.startOptions) throw new Error("Expected bounded-turn start options");
+        if (!options?.startOptions) {
+          throw new Error("Expected bounded-turn start options");
+        }
         await observeCodexCatalogClient(harness.client, {
           startOptions: options.startOptions,
           agentDir: options.agentDir,
@@ -103,7 +107,9 @@ it.each([false, true])(
     );
     try {
       await index.initialize();
-      if (existing) await index.upsertThread({ ...native.thread, ephemeral: false });
+      if (existing) {
+        await index.upsertThread({ ...native.thread, ephemeral: false });
+      }
       expect((await index.list({})).sessions).toHaveLength(existing ? 1 : 0);
       const result = await runBoundedCodexAppServerTurn({
         model: { mode: "required", id: "gpt-5.4" },

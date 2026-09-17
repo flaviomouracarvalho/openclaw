@@ -76,7 +76,9 @@ async function fixture() {
 }
 
 afterEach(async () => {
-  for (const cleanup of cleanups.splice(0)) await cleanup();
+  for (const cleanup of cleanups.splice(0)) {
+    await cleanup();
+  }
   vi.restoreAllMocks();
   vi.useRealTimers();
 });
@@ -121,8 +123,9 @@ describe("Codex catalog physical status sources", () => {
       const { a, b, index, active } = await fixture();
       active(a, "shared-broadcast");
       active(b, "shared-broadcast");
-      if (withdrawal === "close") b.client.close();
-      else {
+      if (withdrawal === "close") {
+        b.client.close();
+      } else {
         b.send({
           method: "thread/status/changed",
           params: { threadId: "thread-1", status: { type: "notLoaded" } },
@@ -168,7 +171,7 @@ describe("Codex catalog physical status sources", () => {
       a.client.close();
       active(b, "source-b");
       const response = await reading;
-      expect(JSON.parse(JSON.stringify(response.thread))).toEqual(native);
+      expect(response.thread).toEqual(native);
       await index.upsertThread(response.thread);
       expect((await index.list({})).sessions[0]).toMatchObject({
         status: "active",

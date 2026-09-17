@@ -14,7 +14,9 @@ export class CodexCatalogStatusIndex {
 
   update(threadId: string, status: CodexCatalogStatus, source: CodexCatalogSource): void {
     const next = this.next(threadId, status, source);
-    if (next) this.values.update(threadId, next);
+    if (next) {
+      this.values.update(threadId, next);
+    }
   }
 
   observe(
@@ -24,14 +26,18 @@ export class CodexCatalogStatusIndex {
     source: CodexCatalogSource | undefined,
   ): void {
     const next = source ? this.next(threadId, status, source) : undefined;
-    if (next) this.values.observe(threadId, next, revision);
+    if (next) {
+      this.values.observe(threadId, next, revision);
+    }
   }
 
   get(threadId: string): CodexCatalogStatus | undefined {
     const current = this.values.get(threadId);
     if (current) {
       for (const source of current.sources) {
-        if (!source.closed) return current.status;
+        if (!source.closed) {
+          return current.status;
+        }
       }
     }
     return undefined;
@@ -49,7 +55,9 @@ export class CodexCatalogStatusIndex {
     this.values.deleteWhere((entry) => {
       entry.sources.delete(source);
       for (const witness of entry.sources) {
-        if (!witness.closed) return false;
+        if (!witness.closed) {
+          return false;
+        }
       }
       return true;
     });
@@ -60,7 +68,9 @@ export class CodexCatalogStatusIndex {
     status: CodexCatalogStatus,
     source: CodexCatalogSource,
   ): SourcedStatus | undefined {
-    if (source.closed) return undefined;
+    if (source.closed) {
+      return undefined;
+    }
     const current = this.values.get(threadId);
     const sources = new Set([...(current?.sources ?? [])].filter((witness) => !witness.closed));
     if (
@@ -71,7 +81,9 @@ export class CodexCatalogStatusIndex {
     ) {
       // An unobserved source's withdrawal still fences its older pending reads.
       sources.delete(source);
-      if (sources.size) return { status: current.status, sources };
+      if (sources.size) {
+        return { status: current.status, sources };
+      }
     }
     const flags = status.activeFlags ?? [];
     const previousFlags = current?.status.activeFlags ?? [];
@@ -80,7 +92,9 @@ export class CodexCatalogStatusIndex {
       flags.length === previousFlags.length &&
       flags.every((flag, index) => flag === previousFlags[index])
     ) {
-      if (sources.size < MAX_STATUS_SOURCE_WITNESSES) sources.add(source);
+      if (sources.size < MAX_STATUS_SOURCE_WITNESSES) {
+        sources.add(source);
+      }
       return { status, sources };
     }
     return { status, sources: new Set([source]) };

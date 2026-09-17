@@ -149,7 +149,9 @@ export async function walkNativeCatalog(
     if (cursor && cursors.has(cursor)) {
       throw new Error("Native performance fixture returned a repeated cursor");
     }
-    if (cursor) cursors.add(cursor);
+    if (cursor) {
+      cursors.add(cursor);
+    }
   } while (cursor);
   return { rows, pages };
 }
