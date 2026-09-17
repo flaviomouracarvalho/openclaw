@@ -342,6 +342,9 @@ export class ModelSetupWizardRunner {
             },
           );
         } catch (error) {
+          if (session !== this.session || this.isRetired(session) || session.suspended) {
+            return undefined;
+          }
           if (!isWizardNotFoundError(error)) {
             throw error;
           }

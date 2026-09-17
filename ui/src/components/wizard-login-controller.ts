@@ -35,6 +35,13 @@ export class WizardLoginController {
     this.runner = new ModelSetupWizardRunner({
       ...options,
       onChange: (next) => {
+        if (next.phase === "starting") {
+          this.generation += 1;
+        }
+        if (next.phase !== "step") {
+          this.cancelling = false;
+          this.cancellationNotice = null;
+        }
         if (next.phase === "step" && next.step.id !== this.stepId) {
           this.value = initialWizardValue(next.step);
         } else if (next.phase !== "step") {
