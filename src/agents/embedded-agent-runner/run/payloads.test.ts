@@ -15,14 +15,11 @@ import {
 
 describe("buildEmbeddedRunPayloads tool-error warnings", () => {
   function expectNoPayloads(params: Parameters<typeof buildPayloads>[0]) {
-    // Many suppression cases should produce no channel reply at all; keep the
-    // assertion explicit so accidental fallback text is obvious.
-    const payloads = buildPayloads(params);
-    expect(payloads).toHaveLength(0);
+    expect(buildPayloads(params)).toStrictEqual([]);
   }
 
   it("does not fall back to commentary-only assistant text when streamed text was suppressed", () => {
-    const payloads = buildPayloads({
+    expectNoPayloads({
       lastAssistant: {
         role: "assistant",
         stopReason: "toolUse",
@@ -39,8 +36,6 @@ describe("buildEmbeddedRunPayloads tool-error warnings", () => {
         ],
       } as AssistantMessage,
     });
-
-    expect(payloads).toStrictEqual([]);
   });
 
   it("strips provider reasoning close tags from streamed assistant payload text", () => {
@@ -623,7 +618,9 @@ describe("buildEmbeddedRunPayloads tool-error warnings", () => {
     expectSingleToolErrorPayload(
       buildPayloads({
         assistantTexts: ["NO_REPLY"],
-        answerSegments: [{ textEnd: 1, messageEnd: 2, lastAssistant: silent }],
+        answerSegments: [
+          { textEnd: 1, messageEnd: 2, finalMessageStart: 2, lastAssistant: silent },
+        ],
         lastToolError: { toolName: "read", error: "failed", mutatingAction: false },
       }),
       { title: "Read" },
