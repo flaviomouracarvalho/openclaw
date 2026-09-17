@@ -81,9 +81,9 @@ describe("session catalog Gateway HOME isolation", () => {
     setActivePluginRegistry(activeRegistry);
     projection = createSessionRowProjectionFixture({ cfg: {}, store: {} });
   });
-  afterEach(() => {
+  afterEach(async () => {
     projection.dispose();
-    clearActivePluginRegistry();
+    await clearActivePluginRegistry();
   });
 
   it.each([true, false])("reads only the scoped registry (has catalog: %s)", async (hasCatalog) => {

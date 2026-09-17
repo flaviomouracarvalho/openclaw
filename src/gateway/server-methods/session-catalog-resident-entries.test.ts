@@ -125,8 +125,8 @@ it("reads clean local catalog entries from the resident owner without SQLite", a
 
 it("does not attach a replacement session identity after provider enumeration yields", async () => {
   await withCatalog(async ({ list, setList }) => {
-    const started = createDeferredCore<void>();
-    const release = createDeferredCore<void>();
+    const started = createDeferredCore();
+    const release = createDeferredCore();
     setList(async ({ sessionEntries }) => {
       expect(
         sessionEntries?.entriesForCatalog?.().find((entry) => entry.sessionKey === key)?.entry
