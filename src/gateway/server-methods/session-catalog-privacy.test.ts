@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   ErrorCodes,
   type SessionCatalogHost,
+  type SessionsCatalogHostEvent,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import * as sessionAccessor from "../../config/sessions/session-accessor.js";
@@ -650,7 +651,9 @@ describe("catalog delivery uses current canonical privacy", () => {
           return [observed];
         });
         const delivered = createDeferredCore();
-        const broadcast = vi.fn(() => delivered.resolve());
+        const broadcast = vi.fn<(_event: string, payload: SessionsCatalogHostEvent) => void>(() =>
+          delivered.resolve(),
+        );
         const pending = call(
           "sessions.catalog.list",
           { progressId: "replacement" },
