@@ -1,6 +1,10 @@
 import { AsyncLocalStorage } from "node:async_hooks";
+import { runWithGatewayDetachedWorkAdmission } from "../process/gateway-work-admission.js";
 import type { SessionRowChange } from "../sessions/session-row-changes.js";
-import { yieldSessionListWork } from "./session-projection-work.js";
+import {
+  canRunSessionListBackgroundWork,
+  yieldSessionListBackgroundWork,
+} from "./session-projection-work.js";
 import type { Row } from "./session-row-projection-record.js";
 import { backfillSessionRowTranscriptFields } from "./session-row-transcript-backfill.js";
 
@@ -15,8 +19,10 @@ export function createSessionRowProjectionBackfill(params: {
   ) => void;
 }) {
   const inOwnerContext = AsyncLocalStorage.snapshot();
+  const cancellation = new AbortController();
   const queued = new Set<string>();
   let pending: Promise<void> | undefined;
+  let activeId: string | undefined;
   let started = false;
   let disposed = false;
   async function drain() {
@@ -24,10 +30,13 @@ export function createSessionRowProjectionBackfill(params: {
       if (disposed || !queued.size) {
         return;
       }
-      await yieldSessionListWork();
+      await yieldSessionListBackgroundWork();
       await params.ready();
       if (disposed) {
         return;
+      }
+      if (!canRunSessionListBackgroundWork()) {
+        continue;
       }
       const id = queued.values().next().value;
       if (id === undefined) {
@@ -35,31 +44,51 @@ export function createSessionRowProjectionBackfill(params: {
       }
       queued.delete(id);
       const row = params.read(id);
-      if (!row?.entry) {
+      const entry = row?.entry;
+      if (!row || !entry) {
         continue;
       }
+      activeId = id;
       const current = () => !disposed && params.current(row);
+      let interrupted = false;
+      const shouldCommit = () => {
+        if (!canRunSessionListBackgroundWork()) {
+          interrupted = true;
+          return false;
+        }
+        return current();
+      };
       try {
-        const fields = await backfillSessionRowTranscriptFields({
-          ...row.storeTarget,
-          agentId: row.agentId,
-          storeAgentId: row.storeTarget.agentId,
-          sessionKey: row.key,
-          sessionId: row.entry.sessionId,
-          sessionEntry: row.entry,
-          lifecycleRevision: row.entry.lifecycleRevision,
-          shouldCommit: current,
-          model: row.materialized && {
-            selectedProvider: row.materialized.source.selectedModel.provider,
-            selectedModel: row.materialized.source.selectedModel.model,
-            config: row.materialized.source.cfg,
-          },
-        });
-        if (current()) {
+        const fields = await runWithGatewayDetachedWorkAdmission(
+          () =>
+            backfillSessionRowTranscriptFields({
+              ...row.storeTarget,
+              agentId: row.agentId,
+              storeAgentId: row.storeTarget.agentId,
+              sessionKey: row.key,
+              sessionId: entry.sessionId,
+              sessionEntry: entry,
+              lifecycleRevision: entry.lifecycleRevision,
+              shouldCommit,
+              model: row.materialized && {
+                selectedProvider: row.materialized.source.selectedModel.provider,
+                selectedModel: row.materialized.source.selectedModel.model,
+                config: row.materialized.source.cfg,
+              },
+            }),
+          "runtime:session-row-backfill",
+          cancellation.signal,
+        );
+        if (shouldCommit()) {
           params.publish(row, fields);
         }
       } catch {
         // A later owner publication retries optional fields; do not spin on a cold/error row.
+      } finally {
+        activeId = undefined;
+        if (interrupted && current()) {
+          queued.add(id);
+        }
       }
     }
   }
@@ -87,8 +116,9 @@ export function createSessionRowProjectionBackfill(params: {
         "all" in change &&
         typeof change.scope === "string" &&
         !(
-          (change.scope === "config" || change.scope === "catalog") &&
-          params.read(id)?.entry?.fallbackNotice
+          ((change.scope === "config" || change.scope === "stores") && id === activeId) ||
+          ((change.scope === "config" || change.scope === "catalog") &&
+            params.read(id)?.entry?.fallbackNotice)
         )
       ) {
         return;
@@ -101,6 +131,7 @@ export function createSessionRowProjectionBackfill(params: {
     remove: (id: string) => queued.delete(id),
     dispose() {
       disposed = true;
+      cancellation.abort();
       queued.clear();
     },
   };

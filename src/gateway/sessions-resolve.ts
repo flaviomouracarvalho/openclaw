@@ -113,7 +113,7 @@ export async function resolveSessionKeyFromResolveParams(params: {
       configuredAgentsOnly,
     });
   const agentCheck = (key: string, entry: SessionEntry | undefined) =>
-    validateSessionAgentExists(cfg, key, entry, entry?.acp ?? null);
+    validateSessionAgentExists(cfg, key, entry, entry?.acp);
   const sessionIdMatches = (agentId?: string) =>
     filterAndSortSessionEntries({
       ...prepare(agentId),

@@ -84,7 +84,7 @@ export async function createSessionRowProjection(params: {
   const backfill = createSessionRowProjectionBackfill({
     ready: ensureMaterialized,
     read: (id) => rows.get(id),
-    current: isCurrent,
+    current: (row) => !topologyDirty && isCurrent(row),
     publish(row, fields) {
       const current = rows.get(records.identity(row));
       if (
@@ -273,9 +273,10 @@ export async function createSessionRowProjection(params: {
           filename: opened.value.filename,
         });
         if (previous?.identity === databaseIdentity) {
-          return matching({ storePath: previous.target.storePath }).flatMap((row) => {
-            const entry = row.storedEntry ?? readSessionRowEntry(row);
-            return entry ? [{ sessionKey: row.key, entry }] : [];
+          return [...(byStore.get(previous.target.storePath) ?? [])].flatMap((id) => {
+            const row = rows.get(id);
+            const entry = row && (row.storedEntry ?? readSessionRowEntry(row));
+            return row && entry ? [{ sessionKey: row.key, entry }] : [];
           });
         }
         replaced.add(target.storePath);

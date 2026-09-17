@@ -38,7 +38,7 @@ applies the current viewer's visibility and current activity time.
 
 Resident rows use stored titles and usage. Legacy titles, optional message
 previews, and terminal fallback-model metadata fill in through bounded background
-transcript reads; they can be absent from an early response. Backfill does not restore cold archives or parse oversized
+transcript reads; they can be absent from an early response. Foreground requests take priority over background transcript reads and title writes. Backfill does not restore cold archives or parse oversized
 messages, call a model, or change session activity ordering. Missing usage remains
 absent until the normal usage writer records it.
 

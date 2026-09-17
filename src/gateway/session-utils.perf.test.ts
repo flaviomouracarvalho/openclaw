@@ -412,6 +412,7 @@ describe("session list resolver cache", () => {
         let projection: SessionRowProjection | undefined;
         try {
           projection = await createSessionRowProjection({ cfg });
+          await projection.ensureMaterialized();
           expect(resolver).toHaveBeenCalledTimes(2);
           resolver.mockClear();
           for (let request = 0; request < 2; request++) {
