@@ -47,6 +47,8 @@ describe("resident Codex catalog SQLite durability", () => {
     await state.register(freshKey, { version: 1, kind: "row", row: legacy });
     await state.register("complete", { version: 1, kind: "complete" });
     const deletes = vi.spyOn(state, "delete");
+    const restoreEntered = createDeferred<void>();
+    const restoreAllowed = createDeferred<void>();
     const readNative = vi.fn(async () => {
       expect(await state.entries()).not.toEqual(
         expect.arrayContaining([expect.objectContaining({ key: "obsolete-cache-key" })]),
@@ -55,15 +57,27 @@ describe("resident Codex catalog SQLite durability", () => {
     });
     const index = new CodexCatalogIndex({
       homeId: "obsolete-authority",
-      state,
+      state: {
+        ...state,
+        entries: async () => {
+          const entries = await state.entries();
+          restoreEntered.resolve();
+          await restoreAllowed.promise;
+          return entries;
+        },
+      },
       readNative,
       assertCurrent: () => {},
     });
+    const listed = index.list({});
+    void listed.catch(() => undefined);
     try {
-      expect((await index.list({})).sessions).toEqual([]);
+      await restoreEntered.promise;
       expect(deletes).not.toHaveBeenCalled();
       expect(readNative).not.toHaveBeenCalled();
       await index.upsertThread(native);
+      restoreAllowed.resolve();
+      expect((await listed).sessions[0]?.threadId).toBe("fresh");
       await index.initialize();
       expect(deletes).toHaveBeenCalledWith("obsolete-cache-key");
       expect(deletes).not.toHaveBeenCalledWith(freshKey);
@@ -73,6 +87,8 @@ describe("resident Codex catalog SQLite durability", () => {
       );
       expect(persisted).toMatchObject([{ threadId: "fresh", nativeMetadata: true }]);
     } finally {
+      restoreAllowed.resolve();
+      await listed;
       await index.close();
     }
   });
@@ -234,7 +250,9 @@ describe("resident Codex catalog SQLite durability", () => {
     const nativeAllowed = createDeferred<void>();
     let paused = false;
     const readNative = vi.fn(async () => {
-      if (paused) await nativeAllowed.promise;
+      if (paused) {
+        await nativeAllowed.promise;
+      }
       return projectCodexCatalogPage(
         { data: structuredClone(native) },
         { sanitize: sanitizeTerminalText },
@@ -335,7 +353,9 @@ describe("resident Codex catalog SQLite durability", () => {
     const metadata = createDeferred<void>();
     let offline = false;
     const readNative = vi.fn(async (_params: CodexThreadListParams) => {
-      if (offline) await metadata.promise;
+      if (offline) {
+        await metadata.promise;
+      }
       return projectCodexCatalogPage(
         { data: [structuredClone(native)] },
         { sanitize: sanitizeTerminalText },

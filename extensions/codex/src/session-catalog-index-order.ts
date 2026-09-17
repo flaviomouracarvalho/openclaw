@@ -3,11 +3,16 @@ import {
   type CodexCatalogIndexRow,
 } from "./session-catalog-index-state.js";
 
-export function codexCatalogRowRecency(row: CodexCatalogIndexRow): number {
+export type CodexCatalogOrderKey = Pick<
+  CodexCatalogIndexRow,
+  "threadId" | "updatedAt" | "recencyAt" | "sourceOrder"
+>;
+
+export function codexCatalogRowRecency(row: CodexCatalogOrderKey): number {
   return row.recencyAt ?? row.updatedAt ?? 0;
 }
 
-export function compareCodexCatalogRows(a: CodexCatalogIndexRow, b: CodexCatalogIndexRow): number {
+export function compareCodexCatalogRows(a: CodexCatalogOrderKey, b: CodexCatalogOrderKey): number {
   return (
     codexCatalogRowRecency(b) - codexCatalogRowRecency(a) ||
     (a.sourceOrder ?? 0) - (b.sourceOrder ?? 0) ||
@@ -55,10 +60,10 @@ export class CodexCatalogOrdering {
     return row.sourceOrder ?? this.unchangedPosition(row, previous) ?? this.reserveEvent();
   }
 
-  captureBatch(hasRows: boolean) {
-    // Each walk admits at most MAX_ROWS; new rows retain their native order within this block.
-    const base = hasRows ? this.nextEventOrder - CODEX_CATALOG_MAX_ROWS : 0;
-    if (hasRows) {
+  captureBatch(hasCompleteSnapshot: boolean) {
+    // Initial retries retain positive native positions; later refreshes reserve a newer block.
+    const base = hasCompleteSnapshot ? this.nextEventOrder - CODEX_CATALOG_MAX_ROWS : 0;
+    if (hasCompleteSnapshot) {
       this.nextEventOrder = base - 1;
     }
     return (

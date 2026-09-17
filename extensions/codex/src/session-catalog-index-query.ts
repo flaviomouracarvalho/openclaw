@@ -1,6 +1,11 @@
 import { createHash } from "node:crypto";
+import type { CodexCatalogAvailability } from "./session-catalog-availability.js";
 import type { CodexCatalogField, CodexCatalogStatus } from "./session-catalog-index-field.js";
-import { codexCatalogRowRecency } from "./session-catalog-index-order.js";
+import {
+  codexCatalogRowRecency,
+  compareCodexCatalogRows,
+  type CodexCatalogOrderKey,
+} from "./session-catalog-index-order.js";
 import type { CodexCatalogIndexRow } from "./session-catalog-index-state.js";
 import {
   CatalogParamsError,
@@ -47,7 +52,7 @@ export function prepareCodexCatalogQuery(homeId: string, params: CodexSessionCat
     }
     anchor = { time: value[1], id: value[2], sourceOrder: value[3], backwards: value[4] };
   }
-  const cursor = (row: CodexCatalogIndexRow, backwards: boolean) =>
+  const cursor = (row: CodexCatalogOrderKey, backwards: boolean) =>
     Buffer.from(
       JSON.stringify([
         queryId,
@@ -61,24 +66,44 @@ export function prepareCodexCatalogQuery(homeId: string, params: CodexSessionCat
     ordered: readonly CodexCatalogIndexRow[],
     liveStatus: Pick<CodexCatalogField<CodexCatalogStatus>, "get">,
     liveSettings: Pick<CodexCatalogSettingsIndex, "get">,
-  ): CodexSessionCatalogPage => {
+    availability: Pick<CodexCatalogAvailability, "complete" | "frontier">,
+  ): CodexSessionCatalogPage | undefined => {
+    const { complete, frontier } = availability;
+    if (!complete && !frontier) {
+      return undefined;
+    }
+    if (
+      !complete &&
+      frontier &&
+      anchor?.backwards &&
+      compareCodexCatalogRows(frontier, {
+        threadId: anchor.id,
+        updatedAt: anchor.time,
+        recencyAt: anchor.time,
+        sourceOrder: anchor.sourceOrder,
+      }) < 0
+    ) {
+      return undefined;
+    }
     const selected = ordered.filter((row) => {
       const session = row.page.sessions[0];
       return (
         !row.archived &&
         session &&
+        (complete || !frontier || compareCodexCatalogRows(row, frontier) <= 0) &&
         (!cwd || (liveSettings.get(row.threadId)?.cwd ?? session.cwd) === cwd) &&
         (!search || (session.name ?? session.fallbackName)?.toLocaleLowerCase().includes(search))
       );
     });
     let start = 0;
     let end: number | undefined;
+    const after = (row: CodexCatalogOrderKey) =>
+      !anchor ||
+      codexCatalogRowRecency(row) < anchor.time ||
+      (codexCatalogRowRecency(row) === anchor.time &&
+        ((row.sourceOrder ?? 0) > anchor.sourceOrder ||
+          ((row.sourceOrder ?? 0) === anchor.sourceOrder && row.threadId < anchor.id)));
     if (anchor) {
-      const after = (row: CodexCatalogIndexRow) =>
-        codexCatalogRowRecency(row) < anchor.time ||
-        (codexCatalogRowRecency(row) === anchor.time &&
-          ((row.sourceOrder ?? 0) > anchor.sourceOrder ||
-            ((row.sourceOrder ?? 0) === anchor.sourceOrder && row.threadId < anchor.id)));
       const at = selected.findIndex(
         (row) => after(row) || (anchor.backwards && row.threadId === anchor.id),
       );
@@ -93,6 +118,15 @@ export function prepareCodexCatalogQuery(homeId: string, params: CodexSessionCat
     const page = selected.slice(start, end ?? start + limit);
     const first = page[0];
     const last = page.at(-1);
+    let continuation: CodexCatalogOrderKey | undefined =
+      last && start + page.length < selected.length ? last : undefined;
+    if (!complete && !anchor?.backwards && !continuation) {
+      if (!last && (!frontier || !after(frontier))) {
+        return undefined;
+      }
+      continuation =
+        frontier && (!last || compareCodexCatalogRows(frontier, last) > 0) ? frontier : last;
+    }
     return {
       sessions: page.flatMap((row) =>
         row.page.sessions.map(
@@ -107,7 +141,7 @@ export function prepareCodexCatalogQuery(homeId: string, params: CodexSessionCat
           },
         ),
       ),
-      ...(last && start + page.length < selected.length ? { nextCursor: cursor(last, false) } : {}),
+      ...(continuation ? { nextCursor: cursor(continuation, false) } : {}),
       ...(first && start > 0 ? { backwardsCursor: cursor(first, true) } : {}),
     };
   };

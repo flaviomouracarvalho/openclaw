@@ -76,7 +76,7 @@ describe("Codex session catalog errors", () => {
 });
 
 describe("Codex supervision catalog", () => {
-  it("returns the registered provider's resident host while native hydration is pending", async () => {
+  it("waits for the registered provider's first page and then serves its resident host", async () => {
     const pending = createDeferred<{ data: ReturnType<typeof idleThread>[] }>();
     const started = createDeferred<void>();
     commandRpcMocks.codexControlRequest.mockImplementation(async () => {
@@ -101,14 +101,21 @@ describe("Codex supervision catalog", () => {
     });
     const provider = getProvider()!;
     const query = { agentId: "main", hostIds: [home.hostId] };
+    let delivered = false;
+    const listed = provider.list(query).then((hosts) => {
+      delivered = true;
+      return hosts;
+    });
+    void listed.catch(() => undefined);
     try {
-      expect(await provider.list(query)).toMatchObject([
-        { hostId: home.hostId, connected: true, sessions: [] },
-      ]);
       await started.promise;
+      expect(delivered).toBe(false);
       const initialized = control.initialize();
       pending.resolve({ data: [idleThread({ id: "hydrated-thread", source: "cli" })] });
       await initialized;
+      expect(await listed).toMatchObject([
+        { hostId: home.hostId, connected: true, sessions: [{ threadId: "hydrated-thread" }] },
+      ]);
       expect(await provider.list(query)).toMatchObject([
         { hostId: home.hostId, sessions: [{ threadId: "hydrated-thread" }] },
       ]);
@@ -116,6 +123,7 @@ describe("Codex supervision catalog", () => {
       expect(commandRpcMocks.codexControlRequest.mock.calls[0]?.[1]).toBe("thread/list");
     } finally {
       pending.resolve({ data: [] });
+      await listed;
     }
   });
 

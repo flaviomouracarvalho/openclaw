@@ -99,6 +99,37 @@ export function readStoredCodexCatalogRow(value: unknown): CodexCatalogIndexRow 
   }
 }
 
+/** An incomplete cache cannot prove which native rows precede an issued cursor. */
+export async function readCodexCatalogSnapshot(state: CodexCatalogState | undefined) {
+  const entries = (await state?.entries()) ?? [];
+  const rows: CodexCatalogIndexRow[] = [];
+  const obsolete = new Set<string>();
+  let complete = false;
+  for (const entry of entries) {
+    if (entry.value?.version === 1 && entry.value.kind === "complete") {
+      complete = true;
+      continue;
+    }
+    const row = readStoredCodexCatalogRow(entry.value);
+    if (row) {
+      rows.push(row);
+    } else {
+      obsolete.add(entry.key);
+    }
+  }
+  complete &&= obsolete.size === 0;
+  if (!complete) {
+    rows.length = 0;
+    for (const entry of entries) {
+      obsolete.add(entry.key);
+    }
+    if (entries.length) {
+      obsolete.add("complete");
+    }
+  }
+  return { rows, complete, obsolete };
+}
+
 /** Serializes reconstructible cache writes without blocking resident queries. */
 export class CodexCatalogPersistence {
   private readonly pending = new Map<string, StoredCodexCatalogEntry | undefined>();

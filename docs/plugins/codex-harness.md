@@ -34,21 +34,27 @@ An observed turn start also receives a fresh position when its recency falls in
 the same exposed timestamp second as earlier activity.
 
 Explicit homes hydrate in the background when the plugin activates. An implicit
-process home waits for an authorized catalog request. A home without a saved
-snapshot walks native `thread/list` pages once, yielding between pages. Its first
-cold list returns its available snapshot immediately, initially empty, while
-initialization continues in the background. Subsequent sidebar refreshes see the
-new rows; no list waits for native discovery.
+process home waits for an authorized catalog request. A home without a valid,
+complete saved snapshot walks native `thread/list` pages once, yielding between
+pages. Its first list waits for a usable native page or confirmed empty inventory,
+within the existing app-server request timeout. That single request budget also
+covers loading saved state. Partial results carry an opaque continuation cursor;
+a continuation that catches up with discovery waits for the next page within its
+request budget. If discovery is still pending at the deadline, the host reports a
+loading error and asks the caller to retry. The shared hydration continues in the
+background. Partial or invalid saved caches are rebuilt before their rows are
+shown, and initial retries preserve positions already used in continuation cursors.
 The index persists reconstructible display rows and file fingerprints through
-plugin state in the OpenClaw SQLite database. A restart loads this snapshot before
-serving the first list, then reconciles changed files in the background. A
+plugin state in the OpenClaw SQLite database. A valid complete snapshot serves the
+first list without a native request, including on remote app-servers. Background
+work then reconciles changed files and native metadata. A
 database-only native metadata walk recovers changes made while the Gateway was
 stopped and repeats every 30 seconds, including renames, Git branch and other displayed metadata, and the selected rollout
 path after a native revert. Metadata changes and explicit clears are applied even
 when native activity timestamps do not change. Newer Gateway observations fence
 older background pages. These coalesced background walks reuse previews for
-unchanged rows and do not ask Codex to scan or repair rollouts. Catalog requests
-never wait for them. A local database-only response can omit existing files when
+unchanged rows and do not ask Codex to scan or repair rollouts. Requests over a
+complete snapshot never wait for these refreshes. A local database-only response can omit existing files when
 indexing is incomplete or unavailable, so omission alone does not remove a local
 row; verified file disappearance and explicit lifecycle events own removal.
 Loaded/active status has a separate memory-only lifecycle. For each thread, at most

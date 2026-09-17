@@ -241,15 +241,22 @@ describe("registered Codex catalog diagnostics", () => {
     const pending = traces.map((trace) =>
       runWithDiagnosticTraceContext(trace, () => f.control.initialize()),
     );
+    let settledLists = 0;
+    const coldLists = traces.map((trace) =>
+      runWithDiagnosticTraceContext(trace, () => f.list()).then((result) => {
+        settledLists++;
+        return result;
+      }),
+    );
     try {
       await started.promise;
       await nextTurn();
       expect(commandRpcMocks.codexControlRequest).toHaveBeenCalledOnce();
-      expect((await f.list())[0]).toMatchObject({ connected: true, sessions: [] });
+      expect(settledLists).toBe(0);
       clock += 1_500;
       response.resolve({ data: [thread] });
       await Promise.all(pending);
-      const results = await Promise.all(traces.map(() => f.list()));
+      const results = await Promise.all(coldLists);
       expect(results).toEqual(Array.from({ length: 4 }, () => results[0]));
       expect(results[0]?.[0]?.sessions).toEqual([
         expect.objectContaining({ threadId: thread.id, name: privateText, cwd: f.home }),
@@ -257,7 +264,21 @@ describe("registered Codex catalog diagnostics", () => {
       const pages = await emitted(PAGE);
       const lists = await emitted(LIST);
       expect(pages).toHaveLength(1);
-      expect(lists).toEqual([]);
+      expect(lists).toHaveLength(4);
+      for (const list of lists) {
+        expect(fields(list)).toMatchObject({
+          outcome: "resolved",
+          elapsedMs: 1_500,
+          controlPageCalls: 1,
+          adoptionCalls: 1,
+        });
+      }
+      for (const trace of traces) {
+        expect(lists).toContainEqual(
+          expect.objectContaining({ trace: expect.objectContaining(trace) }),
+        );
+      }
+      expect(commandRpcMocks.codexControlRequest).toHaveBeenCalledOnce();
       const producer = fields(pages[0]);
       expect(producer).not.toHaveProperty("controlFailurePhase");
       expect(producer).not.toHaveProperty("controlFailureCategory");
@@ -314,7 +335,7 @@ describe("registered Codex catalog diagnostics", () => {
       }
     } finally {
       response.resolve({ data: [] });
-      await Promise.allSettled(pending);
+      await Promise.allSettled([...pending, ...coldLists]);
     }
   });
 

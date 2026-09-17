@@ -1,4 +1,4 @@
-import { sanitizeTerminalText } from "openclaw/plugin-sdk/text-chunking";
+import * as terminalText from "openclaw/plugin-sdk/text-chunking";
 import { expect, it, vi } from "vitest";
 import type { CodexThreadListResponse } from "./app-server/protocol.js";
 import type { CodexCatalogState } from "./session-catalog-index-state.js";
@@ -11,11 +11,17 @@ import {
 
 it("reconciles saved and externally changed names through background DB-only pages without preview projection", async () => {
   const original = ["renamed", "cleared"].map((id) =>
-    idleThread({ id, name: `Previous ${id}`, source: "cli", originator: "codex_cli_rs" }),
+    idleThread({
+      id,
+      name: `Previous ${id}`,
+      preview: `First user request ${id}`,
+      source: "cli",
+      originator: "codex_cli_rs",
+    }),
   );
   const saved = await projectCodexCatalogPage(
     { data: original },
-    { sanitize: sanitizeTerminalText },
+    { sanitize: terminalText.sanitizeTerminalText },
   );
   const state: CodexCatalogState = {
     entries: vi.fn(async () => [
@@ -29,15 +35,11 @@ it("reconciles saved and externally changed names through background DB-only pag
     register: vi.fn(async () => {}),
     delete: vi.fn(async () => false),
   };
-  const preview = vi.fn(() => {
-    throw new Error("Unchanged metadata reconciliation must not inspect native previews");
-  });
   const renamed = "Offline title ".repeat(60).trim();
-  const native = original.map((thread, index) =>
-    Object.defineProperty({ ...thread, name: index === 0 ? renamed : null }, "preview", {
-      get: preview,
-    }),
-  );
+  const native = original.map((thread, index) => ({
+    ...thread,
+    name: index === 0 ? renamed : null,
+  }));
   commandRpcMocks.codexControlRequest.mockImplementation(
     async (_plugin, method, params, options) => {
       expect(method).toBe("thread/list");
@@ -65,6 +67,7 @@ it("reconciles saved and externally changed names through background DB-only pag
   });
   const source = (await factory.homesForAgent("main"))[0]!;
   const control = factory.forRequest("main", source);
+  const sanitize = vi.spyOn(terminalText, "sanitizeTerminalText");
   vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
   try {
     expect((await control.listPage({})).sessions.map((row) => row.name)).toEqual(
@@ -78,7 +81,7 @@ it("reconciles saved and externally changed names through background DB-only pag
     });
     await control.initialize();
     expect(commandRpcMocks.codexControlRequest).toHaveBeenCalledTimes(2);
-    expect(preview).not.toHaveBeenCalled();
+    expect(sanitize).not.toHaveBeenCalled();
 
     native[0]!.name = "Changed again in the native CLI";
     native[1]!.name = "New external title";
@@ -93,12 +96,13 @@ it("reconciles saved and externally changed names through background DB-only pag
       expect(sessions.find((row) => row.threadId === "cleared")?.name).toBe(native[1]!.name);
     });
     expect(commandRpcMocks.codexControlRequest).toHaveBeenCalledTimes(4);
-    expect(preview).not.toHaveBeenCalled();
+    expect(sanitize).not.toHaveBeenCalled();
   } finally {
     try {
       await factory.stop();
     } finally {
       vi.useRealTimers();
+      sanitize.mockRestore();
     }
   }
 });

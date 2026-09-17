@@ -1,3 +1,4 @@
+import { setImmediate as nextTurn } from "node:timers/promises";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { describe, expect, it } from "vitest";
 import { CodexAppServerRpcError } from "./app-server/rpc-error.js";
@@ -45,7 +46,12 @@ describe("Codex catalog failure recovery", () => {
       expect(commandRpcMocks.codexControlRequest).toHaveBeenCalledTimes(6);
 
       await expect(control.initialize()).rejects.toBe(failure);
-      await expect(search()).resolves.toEqual({ sessions: [] });
+      const partial = await search();
+      expect(partial.sessions).toEqual([]);
+      expect(partial.nextCursor).toEqual(expect.any(String));
+      await expect(
+        control.listPage({ limit: 1, searchTerm: "Wanted", cursor: partial.nextCursor }),
+      ).rejects.toBe(failure);
       expect(commandRpcMocks.codexControlRequest).toHaveBeenCalledTimes(6);
 
       now += 5_000;
@@ -58,7 +64,7 @@ describe("Codex catalog failure recovery", () => {
     },
   );
 
-  it("shares cold initialization and preserves immediate memory reads during host backoff", async () => {
+  it("shares cold initialization and keeps host backoff observable to catalog callers", async () => {
     let now = 0;
     const control = createCodexSessionCatalogControlFactory({
       getPluginConfig: () => ({ supervision: { enabled: true } }),
@@ -86,9 +92,16 @@ describe("Codex catalog failure recovery", () => {
     });
     const calls = Array.from({ length: 18 }, () => request.initialize());
     const settled = Promise.allSettled(calls);
+    let listDelivered = false;
+    const pendingList = list().then((result) => {
+      listDelivered = true;
+      return result;
+    });
+    const observedList = Promise.allSettled([pendingList]);
     try {
       await started.promise;
-      expect((await list())[0]).toMatchObject({ connected: true, sessions: [] });
+      await nextTurn();
+      expect(listDelivered).toBe(false);
       expect(commandRpcMocks.codexControlRequest).toHaveBeenCalledOnce();
       now += 60_000;
       failed.reject(failure);
@@ -96,6 +109,11 @@ describe("Codex catalog failure recovery", () => {
         Array.from({ length: 18 }, () => ({ status: "rejected", reason: failure })),
       );
       expect(commandRpcMocks.codexControlRequest).toHaveBeenCalledOnce();
+      expect((await pendingList)[0]).toMatchObject({
+        connected: false,
+        sessions: [],
+        error: { code: "APP_SERVER_UNAVAILABLE" },
+      });
 
       // The background producer retains its immediate retry and source backoff.
       await expect(request.initialize()).rejects.toBe(failure);
@@ -119,11 +137,15 @@ describe("Codex catalog failure recovery", () => {
       await Promise.all(Array.from({ length: 18 }, () => request.initialize()));
       expect(commandRpcMocks.codexControlRequest).toHaveBeenCalledTimes(3);
       const recovered = await Promise.all(Array.from({ length: 18 }, () => list()));
-      expect(recovered.every((result) => result[0]?.connected && !result[0]?.error)).toBe(true);
+      expect(
+        recovered.every(
+          (result) => result[0]?.connected && !result[0]?.error && result[0]?.sessions.length === 0,
+        ),
+      ).toBe(true);
       expect(commandRpcMocks.codexControlRequest).toHaveBeenCalledTimes(3);
     } finally {
       failed.resolve({ data: [] });
-      await settled;
+      await Promise.all([settled, observedList]);
     }
   });
 

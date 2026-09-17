@@ -266,9 +266,11 @@ describe("resident catalog hydration request lifetime", () => {
       const frame = await h.frame(0);
       const joined = observeHydration(h.control.initialize());
       expect(getCurrentSharedClientEntry(h.companion)?.activeLeases).toBe(3);
-      expect((await pinned.listPage({ limit: 10 })).sessions).toEqual([]);
+      const listed = pinned.listPage({ limit: 10 });
+      void listed.catch(() => undefined);
       h.reply(frame, "shared");
       await Promise.all([pending, joined]);
+      expect((await listed).sessions).toMatchObject([{ threadId: "shared" }]);
       expect(h.frames).toHaveLength(1);
       expect(getCurrentSharedClientEntry(h.companion)?.activeLeases).toBe(2);
       expect((await pinned.listPage({ limit: 10 })).sessions).toMatchObject([
@@ -287,11 +289,13 @@ describe("resident catalog hydration request lifetime", () => {
       const frame = await h.frame(0);
       const control = variation === "agent" ? h.factory.forRequest("other") : h.control;
       const joined = observeHydration(control.initialize());
-      expect((await control.listPage({ limit: 10 })).sessions).toEqual([]);
+      const listed = control.listPage({ limit: 10 });
+      void listed.catch(() => undefined);
       await nextTurn();
       expect(h.requests.mock.calls.filter(([method]) => method === "thread/list")).toHaveLength(1);
       h.reply(frame, "shared");
       await Promise.all([first, joined]);
+      expect((await listed).sessions).toMatchObject([{ threadId: "shared" }]);
       expect((await control.listPage({ limit: 10 })).sessions).toMatchObject([
         { threadId: "shared" },
       ]);
@@ -378,7 +382,7 @@ describe("resident catalog hydration request lifetime", () => {
     },
   );
 
-  it("serves replacement configs immediately while draining retired hydration at shutdown", async () => {
+  it("serves replacement configs independently while draining retired hydration at shutdown", async () => {
     const first = observeHydration(h.control.initialize());
     const retired = await h.frame(0);
     let retiredReplied = false;
@@ -397,14 +401,13 @@ describe("resident catalog hydration request lifetime", () => {
           return result;
         });
         void listed.catch(() => undefined);
-        // The remote identity and empty state settle within this event-loop turn;
-        // the old native request remains gated and its timeout clock does not move.
+        // The replacement awaits its own first page, not the retired native request.
         await nextTurn();
-        expect(delivered).toHaveBeenCalledWith({ sessions: [] });
-        await expect(listed).resolves.toEqual({ sessions: [] });
+        expect(delivered).not.toHaveBeenCalled();
         const current = observeHydration(h.control.initialize());
         h.reply(await h.frame(generation), `replacement-${generation}`);
         await current;
+        expect((await listed).sessions).toMatchObject([{ threadId: `replacement-${generation}` }]);
         expect((await h.control.listPage({})).sessions).toMatchObject([
           { threadId: `replacement-${generation}` },
         ]);
@@ -461,15 +464,11 @@ describe("resident catalog hydration request lifetime", () => {
       expect(state.entries).toHaveBeenCalledOnce();
       writeAllowed.resolve();
       await nextTurn();
-      expect(delivered).toHaveBeenCalledWith(
-        expect.objectContaining({
-          sessions: [expect.objectContaining({ threadId: "retired-prefix" })],
-        }),
-      );
-      await listed;
+      expect(delivered).not.toHaveBeenCalled();
       const current = observeHydration(control.initialize());
       h.reply(await h.frame(2), "current-thread");
       await current;
+      expect((await listed).sessions).toMatchObject([{ threadId: "current-thread" }]);
       const beforeRetiredReply = await state.entries();
       expect(
         beforeRetiredReply.flatMap(({ value }) =>

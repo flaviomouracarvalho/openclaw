@@ -44,7 +44,7 @@ describe("Codex catalog resident home sharing", () => {
   });
 
   it.each(["resolve", "reject"] as const)(
-    "returns cold lists immediately while one shared initializer will %s",
+    "waits for the first native page while one shared initializer will %s",
     async (outcome) => {
       const held = createDeferred<unknown>();
       const started = createDeferred<void>();
@@ -56,17 +56,18 @@ describe("Codex catalog resident home sharing", () => {
         getPluginConfig: () => ({ supervision: { enabled: true } }),
         getRuntimeConfig: () => config,
       });
-      const cold = await control.listPage({ limit: 1 });
-      expect(cold).toEqual({ sessions: [] });
-      expect(commandRpcMocks.codexControlRequest).not.toHaveBeenCalled();
-      const initializing = control.initialize();
-      const joined = control.initialize();
-      const results = Promise.allSettled([initializing, joined]);
+      let delivered = 0;
+      const lists = [
+        { limit: 1 },
+        { limit: 2, searchTerm: "native" },
+        { cwd: "/workspace/project" },
+      ].map((query) => control.listPage(query).finally(() => delivered++));
+      const listed = Promise.allSettled(lists);
+      const initialized = Promise.allSettled([control.initialize(), control.initialize()]);
       try {
         await started.promise;
-        expect(await control.listPage({ limit: 2, searchTerm: "native" })).toEqual(cold);
-        expect(await control.listPage({ cwd: "/workspace/project" })).toEqual(cold);
         await nextTurn();
+        expect(delivered).toBe(0);
         expect(commandRpcMocks.codexControlRequest).toHaveBeenCalledOnce();
         const failure = new Error("native hydration failed");
         if (outcome === "resolve") {
@@ -74,19 +75,27 @@ describe("Codex catalog resident home sharing", () => {
         } else {
           held.reject(failure);
         }
-        for (const result of await results) {
+        for (const result of await initialized) {
           expect(result).toEqual(
             outcome === "resolve"
               ? { status: "fulfilled", value: undefined }
               : { status: "rejected", reason: failure },
           );
         }
-        if (outcome === "resolve") {
-          expect((await control.listPage({})).sessions).toMatchObject([{ threadId: "thread-1" }]);
+        for (const result of await listed) {
+          if (outcome === "resolve") {
+            expect(result).toMatchObject({
+              status: "fulfilled",
+              value: { sessions: [{ threadId: "thread-1" }] },
+            });
+          } else {
+            expect(result).toEqual({ status: "rejected", reason: failure });
+          }
         }
+        expect(commandRpcMocks.codexControlRequest).toHaveBeenCalledOnce();
       } finally {
         held.resolve({ data: [] });
-        await results;
+        await Promise.all([initialized, listed]);
       }
     },
   );

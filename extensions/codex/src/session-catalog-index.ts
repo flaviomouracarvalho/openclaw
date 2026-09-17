@@ -3,6 +3,7 @@ import { setImmediate as nextTurn } from "node:timers/promises";
 import { isDeepStrictEqual } from "node:util";
 import { embeddedAgentLog } from "openclaw/plugin-sdk/agent-harness-registration";
 import type { CodexThreadListParams, CodexThread } from "./app-server/protocol.js";
+import { CodexCatalogAvailability } from "./session-catalog-availability.js";
 import { subscribeCodexCatalogEvents } from "./session-catalog-events.js";
 import { CodexCatalogIndexEvents } from "./session-catalog-index-events.js";
 import { CodexCatalogField } from "./session-catalog-index-field.js";
@@ -11,12 +12,13 @@ import { CodexCatalogObservations } from "./session-catalog-index-observations.j
 import {
   compareCodexCatalogRows as order,
   CodexCatalogOrdering,
+  type CodexCatalogOrderKey,
 } from "./session-catalog-index-order.js";
 import { prepareCodexCatalogQuery } from "./session-catalog-index-query.js";
 import {
   CODEX_CATALOG_MAX_ROWS,
   codexCatalogMetadataPage,
-  readStoredCodexCatalogRow,
+  readCodexCatalogSnapshot,
   type CodexCatalogState,
   type CodexCatalogIndexRow,
   type CodexCatalogRolloutFingerprint,
@@ -58,12 +60,14 @@ type IndexOptions = {
   localSessionsRoot?: string;
   state?: CodexCatalogState;
   readNative: CodexCatalogIndexRead;
+  requestTimeoutMs?: number;
   assertCurrent: () => void;
   runBackground?: (run: () => Promise<void>) => Promise<void>;
 };
 /** One home owns all queries. Only hydration, notifications and directory currency do I/O. */
 export class CodexCatalogIndex {
   private readonly rows = new Map<string, CodexCatalogIndexRow>();
+  private readonly availability = new CodexCatalogAvailability();
   private readonly liveStatus = new CodexCatalogStatusIndex();
   private readonly liveSettings = new CodexCatalogSettingsIndex();
   private readonly names = new CodexCatalogField<string | null>();
@@ -217,6 +221,7 @@ export class CodexCatalogIndex {
       return;
     }
     if (!this.initializing) {
+      this.availability.begin();
       const sourceRevision = this.sourceRevision;
       this.initializing = (async () => {
         await this.restore();
@@ -227,7 +232,7 @@ export class CodexCatalogIndex {
           let observedRevision: number;
           do {
             observedRevision = await this.observations.observe((isCurrent) =>
-              this.hydrate(isCurrent),
+              this.hydrate(isCurrent, this.availability.complete),
             );
           } while (observedRevision !== this.sourceRevision);
         }
@@ -242,6 +247,7 @@ export class CodexCatalogIndex {
       })()
         .catch((error: unknown) => {
           this.failure = { error };
+          this.availability.fail(error);
           throw error;
         })
         .finally(() => {
@@ -259,47 +265,35 @@ export class CodexCatalogIndex {
       return;
     }
     this.restoring ??= this.observations.observe(async (isCurrent) => {
-      let complete = false;
-      let validSnapshot = true;
-      if (this.options.state) {
-        try {
-          const entries = await this.options.state.entries();
-          this.assertCurrent();
-          for (const entry of entries) {
-            if (entry.value?.version === 1 && entry.value.kind === "complete") {
-              complete = true;
-              continue;
-            }
-            const row = readStoredCodexCatalogRow(entry.value);
-            if (!row) {
-              validSnapshot = false;
-              this.obsoleteStoredKeys.add(entry.key);
-            }
-            if (row && isCurrent(row.threadId)) {
-              const restored = row.rolloutPath
-                ? { ...row, rolloutPath: codexCatalogRolloutLogicalPath(row.rolloutPath) }
-                : row;
-              const patched = this.withName(restored);
-              if (patched !== restored) {
-                this.persistence.put(patched);
-              }
-              this.rows.set(row.threadId, patched);
-              this.ordering.restore(row);
-            }
-          }
-        } catch (error) {
-          this.report(error);
+      try {
+        const snapshot = await readCodexCatalogSnapshot(this.options.state);
+        this.assertCurrent();
+        for (const key of snapshot.obsolete) {
+          this.obsoleteStoredKeys.add(key);
         }
+        for (const row of snapshot.rows) {
+          if (isCurrent(row.threadId)) {
+            const restored = row.rolloutPath
+              ? { ...row, rolloutPath: codexCatalogRolloutLogicalPath(row.rolloutPath) }
+              : row;
+            const patched = this.withName(restored);
+            if (patched !== restored) {
+              this.persistence.put(patched);
+            }
+            this.rows.set(row.threadId, patched);
+            this.ordering.restore(row);
+          }
+        }
+        if (snapshot.complete) {
+          this.availability.publish(undefined, true);
+          this.initialized = true;
+          this.needsNativeRefresh = true;
+          this.startCurrency();
+        }
+      } catch (error) {
+        this.report(error);
       }
       this.restored = true;
-      if (!validSnapshot) {
-        this.obsoleteStoredKeys.add("complete");
-      }
-      if (complete && validSnapshot && this.options.localSessionsRoot) {
-        this.initialized = true;
-        this.needsNativeRefresh = true;
-        this.startCurrency();
-      }
     });
     await this.restoring;
   }
@@ -353,7 +347,7 @@ export class CodexCatalogIndex {
   }
 
   private reconcileNative(): Promise<void> {
-    if (!this.options.localSessionsRoot && this.initializing) {
+    if (!this.options.localSessionsRoot && this.initializing && !this.initialized) {
       return this.initializing;
     }
     if (!this.reconcilingNative) {
@@ -380,7 +374,8 @@ export class CodexCatalogIndex {
     let observedRevision = this.sourceRevision;
     let firstPage = true;
     let sourceOrder = 0;
-    const batchOrder = this.ordering.captureBatch(this.rows.size > 0);
+    let frontier: CodexCatalogOrderKey | undefined;
+    const batchOrder = this.ordering.captureBatch(this.availability.complete);
     const remaining = new Map(this.rows);
     const cursors = new Set<string>();
     do {
@@ -436,6 +431,7 @@ export class CodexCatalogIndex {
           sourceOrder: batchOrder(row, previous, position),
           ...(fingerprint ? { fingerprint } : {}),
         });
+        frontier = this.rows.get(row.threadId) ?? frontier;
       }
       cursor = readControlCursor(page.nextCursor, "hydration response");
       if (cursor && cursors.has(cursor)) {
@@ -443,6 +439,7 @@ export class CodexCatalogIndex {
       }
       if (cursor) {
         cursors.add(cursor);
+        this.availability.publish(frontier);
       }
       await nextTurn();
     } while (cursor);
@@ -455,6 +452,7 @@ export class CodexCatalogIndex {
         }
       }
     }
+    this.availability.publish(frontier, true);
     await this.persistence.finishHydration();
     return observedRevision;
   }
@@ -692,19 +690,25 @@ export class CodexCatalogIndex {
 
   async list(params: CodexSessionCatalogPageParams): Promise<CodexSessionCatalogPage> {
     const query = prepareCodexCatalogQuery(this.options.homeId, params);
-    await this.restore();
+    const deadline = performance.now() + (this.options.requestTimeoutMs ?? 60_000);
+    await this.availability.until(this.restore(), deadline);
     this.assertCurrent();
     this.scheduleHydration();
-    if (this.failure && this.rows.size === 0) {
-      throw this.failure.error;
+    for (;;) {
+      this.assertCurrent();
+      this.ordered ??= [...this.rows.values()].toSorted(order);
+      const page = query(this.ordered, this.liveStatus, this.liveSettings, this.availability);
+      if (page) {
+        return page;
+      }
+      await this.availability.next(deadline);
     }
-    this.ordered ??= [...this.rows.values()].toSorted(order);
-    return query(this.ordered, this.liveStatus, this.liveSettings);
   }
 
   /** Fence future publications before a replacement opens the same persisted home. */
   retire(): Promise<void> {
     this.closed = true;
+    this.availability.fail(new Error("Codex resident catalog is closed"));
     this.liveStatus.invalidate();
     this.liveSettings.invalidate();
     this.unsubscribe();

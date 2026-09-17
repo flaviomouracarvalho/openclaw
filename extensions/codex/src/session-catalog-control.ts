@@ -414,6 +414,7 @@ export function createCodexSessionCatalogControl(params: {
       };
       index = new CodexCatalogIndex({
         homeId,
+        requestTimeoutMs: runtime.requestTimeoutMs,
         runBackground: (run) => runBackground(run),
         localSessionsRoot: root,
         state: params.openResidentState?.(homeId),
