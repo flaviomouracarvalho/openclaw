@@ -1,6 +1,7 @@
 import { expect, it, vi } from "vitest";
 import { createDeferred, withTestTimeout } from "../../../test/helpers/promise.js";
 import type { ChannelOutboundContext } from "../../channels/plugins/outbound.types.js";
+import type { ChannelPollContext } from "../../channels/plugins/types.core.js";
 import type { ChannelPlugin } from "../../channels/plugins/types.public.js";
 import {
   clearRuntimeConfigSnapshot,
@@ -75,6 +76,14 @@ it.each([
     accepted: false,
     laterError: "cron message action authority is no longer active",
   },
+  {
+    cause: "message authority closes before a poll provider retry",
+    revokeAt: "poll-retry" as const,
+    action: "poll" as const,
+    retire: noteActiveCronJobMessageActionAuthorityMutation,
+    accepted: false,
+    laterError: "cron message action authority is no longer active",
+  },
 ])(
   "owns scheduled message lifetime when $cause",
   async ({ revokeAt, action, retire, accepted, laterError }) => {
@@ -105,8 +114,9 @@ it.each([
       const sends: string[] = [];
       const queueIds: Array<string | undefined> = [];
       const mutations: string[] = [];
+      const pollRequests: string[] = [];
       const sendText = vi.fn(
-        async ({ text, deliveryQueueId, assertDirectAdapterHandoff }: ChannelOutboundContext) => {
+        async ({ text, deliveryQueueId, onPlatformSendDispatch }: ChannelOutboundContext) => {
           sends.push(text);
           queueIds.push(deliveryQueueId);
           if (revokeAt === "provider") {
@@ -116,7 +126,7 @@ it.each([
           if (revokeAt === "retry") {
             boundaryEntered.resolve();
             await releaseBoundary.promise;
-            assertDirectAdapterHandoff?.();
+            await onPlatformSendDispatch?.();
           }
           return { channel: "discord", messageId: `message-${sends.length}` };
         },
@@ -128,10 +138,20 @@ it.each([
         }
         return [{ kind: "group" as const, id: "channel:100000000000000001", name: "alerts" }];
       };
+      const sendPoll = vi.fn(async ({ assertDirectAdapterHandoff }: ChannelPollContext) => {
+        pollRequests.push("initial");
+        if (revokeAt === "poll-retry") {
+          boundaryEntered.resolve();
+          await releaseBoundary.promise;
+          assertDirectAdapterHandoff?.();
+          pollRequests.push("retry");
+        }
+        return { channel: "discord", messageId: "poll-1" };
+      });
       const plugin: ChannelPlugin = {
         ...createChannelTestPluginBase({ id: "discord" }),
         actions: {
-          describeMessageTool: () => ({ actions: ["send", "set-presence"] }),
+          describeMessageTool: () => ({ actions: ["send", "poll", "set-presence"] }),
           supportsAction: ({ action: requestedAction }) => requestedAction === "set-presence",
           handleAction: async ({ action: requestedAction }) => {
             if (requestedAction !== "set-presence") {
@@ -145,7 +165,7 @@ it.each([
             return { content: [{ type: "text", text: '{"ok":true}' }], details: { ok: true } };
           },
         },
-        outbound: { deliveryMode: "direct", sendText },
+        outbound: { deliveryMode: "direct", sendText, sendPoll },
         directory: {
           listGroupsLive: listTargetsLive,
           listPeersLive: listTargetsLive,
@@ -223,6 +243,13 @@ it.each([
               {
                 action,
                 channel: "discord",
+                ...(action === "poll"
+                  ? {
+                      target: "channel:100000000000000001",
+                      pollQuestion: "Ship?",
+                      pollOption: ["Yes", "No"],
+                    }
+                  : {}),
               },
               source.signal,
             );
@@ -267,6 +294,7 @@ it.each([
       expect(sends).toEqual(sendAttempts ? ["first"] : []);
       expect(queueIds).toEqual(sendAttempts ? [undefined] : []);
       expect(mutations).toEqual(accepted && action === "set-presence" ? ["set-presence"] : []);
+      expect(pollRequests).toEqual(action === "poll" ? ["initial"] : []);
       if (revokeAt === "retry") {
         expect(await loadUnfinishedDeliveries(state.stateDir)).toEqual([]);
         const replay = vi.fn();

@@ -182,6 +182,8 @@ type MessagePollParams = {
   inboundEventKind?: InboundEventKind;
   /** @internal Runs immediately before recipient-visible poll platform I/O. */
   onPlatformSendDispatch?: () => Promise<void>;
+  /** @internal Revalidate live caller authority at the direct poll adapter. */
+  assertDirectAdapterHandoff?: () => void;
   /** @internal Channel plugin already selected and bootstrapped by the caller. */
   preparedPlugin?: ChannelPlugin;
 };
@@ -609,6 +611,7 @@ export async function sendPoll(params: MessagePollParams): Promise<MessagePollRe
       throw resolvedTarget.error;
     }
 
+    params.assertDirectAdapterHandoff?.();
     const result = await outbound.sendPoll({
       cfg,
       to: resolvedTarget.to,
@@ -621,6 +624,7 @@ export async function sendPoll(params: MessagePollParams): Promise<MessagePollRe
       sessionKey: params.sessionKey,
       inboundEventKind: params.inboundEventKind,
       onPlatformSendDispatch: params.onPlatformSendDispatch,
+      assertDirectAdapterHandoff: params.assertDirectAdapterHandoff,
     });
 
     return buildMessagePollResult({

@@ -245,13 +245,9 @@ function createChannelActionContext(params: {
     gateway: params.ctx.gateway,
     toolContext: params.ctx.input.toolContext,
     dryRun: params.ctx.dryRun,
-    ...(params.action === "send"
-      ? {
-          onPlatformSendDispatch: params.ctx.input.onPlatformSendDispatch,
-          assertDirectAdapterHandoff: params.ctx.input.assertDirectAdapterHandoff,
-          skipQueue: params.ctx.input.skipQueue,
-        }
-      : {}),
+    onPlatformSendDispatch: params.ctx.input.onPlatformSendDispatch,
+    assertDirectAdapterHandoff: params.ctx.input.assertDirectAdapterHandoff,
+    ...(params.action === "send" ? { skipQueue: params.ctx.input.skipQueue } : {}),
   };
 }
 
@@ -487,6 +483,8 @@ export async function executePollAction(params: {
     preparedPlugin: params.ctx.channelPlugin,
     sessionKey: params.ctx.input.sessionKey,
     inboundEventKind: params.ctx.input.inboundEventKind,
+    onPlatformSendDispatch: params.ctx.input.onPlatformSendDispatch,
+    assertDirectAdapterHandoff: params.ctx.input.assertDirectAdapterHandoff,
   });
 
   return {

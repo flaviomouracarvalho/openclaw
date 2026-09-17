@@ -456,8 +456,8 @@ export async function executeMessagePoll(ctx: ResolvedActionContext): Promise<Me
   const poll = await executePollAction({
     ctx: {
       ...ctx,
-      // Poll actions expose requester IDs and turn context, without send-only
-      // authority or media grants. Preserve that plugin boundary independently.
+      // Poll actions expose requester IDs, turn context, and the same live
+      // provider-call fence as every other scheduled message action.
       mediaAccess: undefined,
       input: {
         cfg,
@@ -470,6 +470,8 @@ export async function executeMessagePoll(ctx: ResolvedActionContext): Promise<Me
         sessionId: input.sessionId,
         inboundEventKind: input.inboundEventKind,
         toolContext: input.toolContext,
+        onPlatformSendDispatch: input.onPlatformSendDispatch,
+        assertDirectAdapterHandoff: input.assertDirectAdapterHandoff,
       },
       silent: silent ?? undefined,
     },
@@ -625,6 +627,7 @@ export async function executeMessagePlugin(
     toolContext: authorization !== undefined ? authorization.toolContext : input.toolContext,
     messageActionAuthorization: authorization,
     assertDirectAdapterHandoff: input.assertDirectAdapterHandoff,
+    onPlatformSendDispatch: input.onPlatformSendDispatch,
     dryRun,
   });
   if (!handled) {

@@ -618,6 +618,9 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
                 ),
                 messageActionAuthorization,
                 assertDirectAdapterHandoff: assertActionCurrent,
+                onPlatformSendDispatch: messageActionAuthorization.scheduled
+                  ? async () => assertActionCurrent()
+                  : undefined,
                 skipQueue: Boolean(messageActionAuthorization.scheduled),
                 senderIsOwner: options?.senderIsOwner,
                 conversationReadOrigin: options?.conversationReadOrigin,
