@@ -36,7 +36,10 @@ import type {
   CodexThreadFinalConfigPatchResult,
 } from "./thread-lifecycle-types.js";
 import { retainCodexAppServerBindingSubscription } from "./thread-ownership.js";
-import { CodexIncognitoPolicyChangeError } from "./thread-policy.js";
+import {
+  assertAdoptedCodexThreadResumeAllowed,
+  CodexIncognitoPolicyChangeError,
+} from "./thread-policy.js";
 import { buildThreadResumeParams } from "./thread-requests.js";
 
 type CodexWarmThreadReuseParams = CodexThreadRequestContext & {
@@ -202,13 +205,7 @@ export async function tryReuseCodexLiveThread(
     return { kind: "rotate" };
   }
 
-  if (
-    !binding.clientId ||
-    binding.clientId !== clientId ||
-    binding.preserveNativeModel === true ||
-    binding.connectionScope === "supervision" ||
-    (ringZeroActive && !incognito)
-  ) {
+  if (!binding.clientId || binding.clientId !== clientId || (ringZeroActive && !incognito)) {
     return { kind: "resume" };
   }
 
@@ -240,6 +237,19 @@ export async function tryReuseCodexLiveThread(
   let preserveSubscription = false;
   try {
     assertWarmOwner();
+    if (binding.preserveNativeModel || binding.connectionScope === "supervision") {
+      const thread = await assertAdoptedCodexThreadResumeAllowed(
+        params,
+        binding.threadId,
+        options,
+        assertWarmOwner,
+      );
+      assertWarmOwner();
+      if (thread.status?.type === "notLoaded") {
+        preserveSubscription = true;
+        return { kind: "resume" };
+      }
+    }
     const pluginThreadConfig = await options.buildLoadedPluginThreadConfig(binding);
     assertWarmOwner();
     if (pluginThreadConfig && pluginThreadConfig.fingerprint !== binding.pluginAppsFingerprint) {
@@ -260,7 +270,10 @@ export async function tryReuseCodexLiveThread(
       (params.pluginThreadConfig?.enabled && binding.pluginAppPolicyContext
         ? buildCodexPluginAppsConfigPatchFromPolicyContext(binding.pluginAppPolicyContext)
         : undefined);
-    const resumeAuthProfileId = params.params.authProfileId ?? binding.authProfileId;
+    const resumeAuthProfileId =
+      binding.connectionScope === "supervision"
+        ? undefined
+        : (params.params.authProfileId ?? binding.authProfileId);
     const resumeConfig = mergeCodexThreadConfigs(
       params.config,
       userMcpServersConfigPatch,
@@ -274,7 +287,7 @@ export async function tryReuseCodexLiveThread(
         authProfileId: resumeAuthProfileId,
         model: startModelSelection.model,
         modelProvider: startModelProvider,
-        preserveNativeModel: false,
+        preserveNativeModel: binding.preserveNativeModel === true,
         appServer: params.appServer,
         dynamicTools: params.dynamicTools,
         developerInstructions: params.developerInstructions,
@@ -296,10 +309,16 @@ export async function tryReuseCodexLiveThread(
             ...resumeParams,
             // Keep the actual loaded provider separate from caller-selected
             // overrides so account or provider changes always invalidate reuse.
-            model: binding.model ?? resumeParams.model ?? null,
-            requestedModel: resumeParams.model ?? null,
-            modelProvider: binding.modelProvider ?? resumeParams.modelProvider ?? null,
-            requestedModelProvider: resumeParams.modelProvider ?? binding.modelProvider ?? null,
+            model: binding.preserveNativeModel
+              ? null
+              : (binding.model ?? resumeParams.model ?? null),
+            requestedModel: binding.preserveNativeModel ? null : (resumeParams.model ?? null),
+            modelProvider: binding.preserveNativeModel
+              ? null
+              : (binding.modelProvider ?? resumeParams.modelProvider ?? null),
+            requestedModelProvider: binding.preserveNativeModel
+              ? null
+              : (resumeParams.modelProvider ?? binding.modelProvider ?? null),
           },
           resumeAuthProfileId,
           dynamicToolsFingerprint,
@@ -327,7 +346,7 @@ export async function tryReuseCodexLiveThread(
     assertWarmOwner();
     const nativeHookRelayGeneration =
       prebuiltFinalConfigPatch.nativeHookRelayGeneration ?? binding.nativeHookRelayGeneration;
-    const model = startModelSelection.model;
+    const model = binding.preserveNativeModel ? binding.model : startModelSelection.model;
     // Validate ownership even when relay generation is unchanged; reset may
     // have replaced the persisted binding since it was first read. Model and
     // cwd are sticky turn settings, so future turns and /btw need current facts.

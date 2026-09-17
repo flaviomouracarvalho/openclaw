@@ -2,6 +2,7 @@
 summary: "Share native Codex threads, supervise sessions, and enable native plugins and Computer Use"
 read_when:
   - You want OpenClaw to share the native Codex home
+  - You want to use your existing local Codex config.toml and login
   - You are enabling Codex supervision
   - You are enabling native Codex plugins or Computer Use
 title: "Native Codex state and features"
@@ -75,6 +76,70 @@ explicit `appServer` connection settings, that connection defaults to managed
 user-home stdio while the ordinary harness stays agent-scoped. Explicit
 `appServer` settings are honored by both paths. Set `homeScope: "user"`
 explicitly, as above, when the ordinary harness should also share native state.
+
+## Use an existing local config.toml
+
+Connect to the same local Codex App Server to reuse your existing
+`$CODEX_HOME/config.toml` (`~/.codex/config.toml` by default), login, and native
+threads. Codex owns loading that file, trusted project configuration, and its
+normal configuration precedence. You do not need to copy the TOML into
+OpenClaw or sign in again through OpenClaw.
+
+On macOS or Linux, keep the existing Codex daemon running. If you use Codex's
+standalone managed installation and its daemon is not running, start it with:
+
+```bash
+codex app-server daemon start
+```
+
+That command is idempotent and reports the control socket in its JSON response.
+For other installations, use the existing local App Server's Unix socket;
+do not start another App Server against a thread already owned by a different
+process.
+
+Merge these plugin settings into your OpenClaw configuration:
+
+```json5
+{
+  plugins: {
+    entries: {
+      codex: {
+        enabled: true,
+        config: {
+          appServer: {
+            transport: "unix",
+            homeScope: "user",
+          },
+          supervision: {
+            enabled: true,
+          },
+        },
+      },
+    },
+  },
+}
+```
+
+Without `url`, OpenClaw connects to
+`$CODEX_HOME/app-server-control/app-server-control.sock`. The Gateway and native
+daemon must resolve the same Codex home. For a custom socket, set
+`appServer.url` to `"unix:///absolute/path/to/codex.sock"`. OpenClaw connects to
+the running server; it does not start or stop that daemon.
+
+To let native Codex select the model and provider, open a stored or idle session
+from the **Codex** sidebar and choose **Continue as branch**. The resulting
+model-locked Chat uses native configuration for its initial selection and
+preserves native ownership on later turns. Check `/codex binding` in that Chat
+to inspect the actual selection. Ordinary OpenClaw chats still use their
+OpenClaw model route; `homeScope: "user"` by itself does not make every chat
+inherit the TOML model. See [branching behavior](/plugins/codex-supervision#branch-from-a-local-session).
+
+OpenClaw still applies its session tools, instructions, and execution policy
+without rewriting your TOML. Once that policy is established, ordinary
+follow-ups reuse it. Initial attachment or a changed policy can require Codex
+to unload an idle thread first. If a turn reports a session policy handoff
+failure, finish native work and close other views of that specific thread,
+then reconnect and retry. Other threads and the daemon can stay running.
 
 ## Supervise Codex sessions
 

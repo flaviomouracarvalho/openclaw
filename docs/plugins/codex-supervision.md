@@ -102,6 +102,9 @@ Set `appServer.homeScope: "user"` explicitly if the harness should share native
 Codex state too. Supervision honors explicit `appServer` connection settings
 instead of replacing them with its local user-home default.
 
+To share a running local daemon and its existing `config.toml` and login, use
+the [local Codex configuration setup](/plugins/codex-harness/native-features#use-an-existing-local-configtoml).
+
 Catalog reads use the selected store's native Codex authentication, including
 when that store is under an OpenClaw agent directory. Browsing stored sessions
 does not require importing a native credential into OpenClaw. Ordinary managed

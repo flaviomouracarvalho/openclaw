@@ -114,7 +114,7 @@ export async function cleanupCodexAttempt(
       (terminalState.settledTurnStatus === "completed" ||
         (state.permissionChangeRestart === "confirmed" && !params.abortSignal?.aborted)) &&
       isIncognitoSessionKey(params.sessionKey);
-    // Incognito retains its creation policy without idle eviction; supervision stays separate.
+    // Incognito retains its creation policy without idle eviction.
     // Ordinary failed turns keep loaded configuration too: native unsubscribe delays unload.
     // Retain that configuration owner so later input can reuse the same thread.
     const retainedOrdinaryThread =
@@ -125,8 +125,6 @@ export async function cleanupCodexAttempt(
           !isIncognitoSessionKey(params.sessionKey) &&
           params.cleanupBundleMcpOnRunEnd !== true &&
           resourceState.thread.liveThreadConfigFingerprint !== undefined &&
-          resourceState.thread.preserveNativeModel !== true &&
-          resourceState.thread.connectionScope !== "supervision" &&
           !resourceState.thread.ringZeroConfigFingerprint)) &&
       resourceState.thread.clientId === resolveCodexAppServerClientInstanceId(resourceState.client)
         ? bindingStore.read(bindingIdentity)?.threadId === resourceState.thread.threadId &&

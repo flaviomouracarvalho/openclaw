@@ -247,8 +247,11 @@ export async function prepareCodexAttemptRuntime(connection: CodexAttemptConnect
           preparedAuth: startupPreparedAuth,
           agentDir,
           config: params.config,
-          modelProviderOverride: usesSupervisionConnection
+          expectedNativeModelProvider: usesSupervisionConnection
             ? mutable.startupBinding?.modelProvider
+            : undefined,
+          modelProviderOverride: usesSupervisionConnection
+            ? undefined
             : resolveCodexAppServerThreadModelSelection({
                 provider: params.provider,
                 model: params.modelId,
