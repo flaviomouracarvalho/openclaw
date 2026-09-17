@@ -618,6 +618,7 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
                 ),
                 messageActionAuthorization,
                 assertDirectAdapterHandoff: assertActionCurrent,
+                skipQueue: Boolean(messageActionAuthorization.scheduled),
                 senderIsOwner: options?.senderIsOwner,
                 conversationReadOrigin: options?.conversationReadOrigin,
                 workspaceDir: options?.workspaceDir,
@@ -697,15 +698,12 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
           const currentSourceReply =
             result.handledBy !== "internal-source" &&
             (await isDeliveredCurrentSourceReplyAsync(sourceReply));
-          const messageDelivery = projectEmbeddedMessageDeliveryFact(result, currentSourceReply);
           // A completed provider write must settle even if its caller was revoked
           // while awaiting the accepted response. Its next request stays fenced.
-          if (
-            !scheduledWrite &&
-            !(messageActionAuthorization.scheduled && messageDelivery?.status === "settled")
-          ) {
+          if (!scheduledWrite && (!messageActionAuthorization.scheduled || scheduledRead)) {
             assertActionCurrent(false);
           }
+          const messageDelivery = projectEmbeddedMessageDeliveryFact(result, currentSourceReply);
           groupThread.record(result, sourceReply, currentSourceReply, requestedSourceReplyFinal);
           if (
             messageDelivery?.status === "settled" &&

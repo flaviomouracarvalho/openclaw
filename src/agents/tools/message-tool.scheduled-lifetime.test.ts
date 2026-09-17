@@ -16,6 +16,8 @@ import {
 } from "../../cron/active-jobs.js";
 import { prepareCronPromptRunAdmission } from "../../cron/isolated-agent/run-admission.js";
 import { registerActiveCronTaskRun } from "../../cron/service/active-run-cancellation.js";
+import { recoverPendingDeliveries } from "../../infra/outbound/delivery-queue-recovery.js";
+import { loadUnfinishedDeliveries } from "../../infra/outbound/delivery-queue-storage.js";
 import {
   captureActivePluginRegistrySnapshot,
   restoreActivePluginRegistrySnapshot,
@@ -25,6 +27,7 @@ import {
   createChannelTestPluginBase,
   createTestRegistry,
 } from "../../test-utils/channel-plugins.js";
+import { createOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { resolveConversationCapabilityProfile } from "../conversation-capability-profile.js";
 import { createEmbeddedMessageInvocationPolicy } from "../scheduled-message-invocation.js";
 import { createMessageTool } from "./message-tool-execution.js";
@@ -33,6 +36,7 @@ it.each([
   {
     cause: "message authority is durably revoked",
     revokeAt: "provider" as const,
+    action: "send" as const,
     retire: noteActiveCronJobMessageActionAuthorityMutation,
     accepted: true,
     laterError: "cron message action authority is no longer active",
@@ -40,6 +44,7 @@ it.each([
   {
     cause: "the active job is cancelled",
     revokeAt: "provider" as const,
+    action: "send" as const,
     retire: (jobId: string) =>
       requestActiveCronJobCancellation(jobId, "Cron job removed by operator."),
     accepted: true,
@@ -48,14 +53,33 @@ it.each([
   {
     cause: "message authority closes during provider target lookup",
     revokeAt: "target" as const,
+    action: "send" as const,
+    retire: noteActiveCronJobMessageActionAuthorityMutation,
+    accepted: false,
+    laterError: "cron message action authority is no longer active",
+  },
+  {
+    cause: "the active job is cancelled after a generic mutation is accepted",
+    revokeAt: "action" as const,
+    action: "set-presence" as const,
+    retire: (jobId: string) =>
+      requestActiveCronJobCancellation(jobId, "Cron job removed by operator."),
+    accepted: true,
+    laterError: "Message send aborted",
+  },
+  {
+    cause: "message authority closes before a refused write retry",
+    revokeAt: "retry" as const,
+    action: "send" as const,
     retire: noteActiveCronJobMessageActionAuthorityMutation,
     accepted: false,
     laterError: "cron message action authority is no longer active",
   },
 ])(
   "owns scheduled message lifetime when $cause",
-  async ({ revokeAt, retire, accepted, laterError }) => {
+  async ({ revokeAt, action, retire, accepted, laterError }) => {
     const registry = captureActivePluginRegistrySnapshot();
+    const state = await createOpenClawTestState();
     const source = new AbortController();
     const boundaryEntered = createDeferred();
     const releaseBoundary = createDeferred();
@@ -73,20 +97,30 @@ it.each([
     let admission: ReturnType<typeof prepareCronPromptRunAdmission> | undefined;
     try {
       const config: OpenClawConfig = {
-        agents: { entries: { main: {} } },
+        agents: { entries: { main: {} }, defaults: { workspace: state.workspaceDir } },
         tools: { allow: ["message"] },
         channels: { discord: { token: "synthetic-token" } },
       };
       setRuntimeConfigSnapshot(config, config);
       const sends: string[] = [];
-      const sendText = vi.fn(async ({ text }: ChannelOutboundContext) => {
-        sends.push(text);
-        if (revokeAt === "provider") {
-          boundaryEntered.resolve();
-          await releaseBoundary.promise;
-        }
-        return { channel: "discord", messageId: `message-${sends.length}` };
-      });
+      const queueIds: Array<string | undefined> = [];
+      const mutations: string[] = [];
+      const sendText = vi.fn(
+        async ({ text, deliveryQueueId, assertDirectAdapterHandoff }: ChannelOutboundContext) => {
+          sends.push(text);
+          queueIds.push(deliveryQueueId);
+          if (revokeAt === "provider") {
+            boundaryEntered.resolve();
+            await releaseBoundary.promise;
+          }
+          if (revokeAt === "retry") {
+            boundaryEntered.resolve();
+            await releaseBoundary.promise;
+            assertDirectAdapterHandoff?.();
+          }
+          return { channel: "discord", messageId: `message-${sends.length}` };
+        },
+      );
       const listTargetsLive = async () => {
         if (revokeAt === "target") {
           boundaryEntered.resolve();
@@ -96,7 +130,20 @@ it.each([
       };
       const plugin: ChannelPlugin = {
         ...createChannelTestPluginBase({ id: "discord" }),
-        actions: { describeMessageTool: () => ({ actions: ["send"] }) },
+        actions: {
+          describeMessageTool: () => ({ actions: ["send", "set-presence"] }),
+          handleAction: async ({ action: requestedAction }) => {
+            if (requestedAction !== "set-presence") {
+              return null;
+            }
+            mutations.push(requestedAction);
+            if (revokeAt === "action") {
+              boundaryEntered.resolve();
+              await releaseBoundary.promise;
+            }
+            return { content: [{ type: "text", text: '{"ok":true}' }], details: { ok: true } };
+          },
+        },
         outbound: { deliveryMode: "direct", sendText },
         directory: {
           listGroupsLive: listTargetsLive,
@@ -167,16 +214,37 @@ it.each([
           },
           source.signal,
         );
+      const execute = (callId: string) =>
+        action === "send"
+          ? send(callId, "first")
+          : tool.execute(
+              callId,
+              {
+                action,
+                channel: "discord",
+              },
+              source.signal,
+            );
 
       await expect(send("explicit-gateway", "blocked", "ws://127.0.0.1:18789")).rejects.toThrow(
         "Scheduled message actions cannot override Gateway routing",
       );
       expect(sendText).not.toHaveBeenCalled();
 
-      pending = send("accepted-before-revocation", "first");
+      pending = execute("accepted-before-revocation");
       void pending.catch(() => undefined);
       await withTestTimeout(
-        boundaryEntered.promise,
+        Promise.race([
+          boundaryEntered.promise,
+          pending.then(
+            () => {
+              throw new Error("Scheduled message action completed before its provider boundary");
+            },
+            (error: unknown) => {
+              throw error;
+            },
+          ),
+        ]),
         5000,
         "Scheduled provider boundary not reached",
       );
@@ -184,15 +252,31 @@ it.each([
       releaseBoundary.resolve();
 
       if (accepted) {
-        await expect(pending).resolves.toMatchObject({
-          details: { result: { messageId: "message-1" } },
-        });
+        await expect(pending).resolves.toMatchObject(
+          action === "send"
+            ? { details: { result: { messageId: "message-1" } } }
+            : { details: { ok: true } },
+        );
       } else {
         await expect(pending).rejects.toThrow("cron message action authority is no longer active");
       }
-      await expect(send("after-revocation", "second")).rejects.toThrow(laterError);
-      expect(sendText).toHaveBeenCalledTimes(accepted ? 1 : 0);
-      expect(sends).toEqual(accepted ? ["first"] : []);
+      await expect(execute("after-revocation")).rejects.toThrow(laterError);
+      const sendAttempts = action === "send" && revokeAt !== "target" ? 1 : 0;
+      expect(sendText).toHaveBeenCalledTimes(sendAttempts);
+      expect(sends).toEqual(sendAttempts ? ["first"] : []);
+      expect(queueIds).toEqual(sendAttempts ? [undefined] : []);
+      expect(mutations).toEqual(accepted && action === "set-presence" ? ["set-presence"] : []);
+      if (revokeAt === "retry") {
+        expect(await loadUnfinishedDeliveries(state.stateDir)).toEqual([]);
+        const replay = vi.fn();
+        await recoverPendingDeliveries({
+          deliver: replay,
+          log: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+          cfg: config,
+          stateDir: state.stateDir,
+        });
+        expect(replay).not.toHaveBeenCalled();
+      }
     } finally {
       source.abort();
       releaseBoundary.resolve();
@@ -202,6 +286,7 @@ it.each([
       clearCronJobActive(jobId, marker);
       restoreActivePluginRegistrySnapshot(registry);
       clearRuntimeConfigSnapshot();
+      await state.cleanup();
     }
   },
 );
