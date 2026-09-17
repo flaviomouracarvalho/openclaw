@@ -119,7 +119,7 @@ export function prepareCodexCatalogQuery(homeId: string, params: CodexSessionCat
     let continuation: CodexCatalogOrderKey | undefined =
       last &&
       (anchor?.backwards
-        ? candidates.some((row) => compareCodexCatalogRows(row, last) > 0)
+        ? !complete || candidates.some((row) => compareCodexCatalogRows(row, last) > 0)
         : start + page.length < selected.length)
         ? last
         : undefined;

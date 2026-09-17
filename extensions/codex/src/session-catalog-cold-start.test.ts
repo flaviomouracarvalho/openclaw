@@ -36,6 +36,51 @@ function savedState(values: StoredCodexCatalogEntry[]): CodexCatalogState {
 }
 
 describe("cold resident catalog availability", () => {
+  it("keeps forward navigation after archiving a backward anchor during hydration", async () => {
+    const tailEntered = createDeferred<void>();
+    const tail = createDeferred<void>();
+    const readNative = vi.fn(async ({ cursor }: CodexThreadListParams) => {
+      if (!cursor) {
+        return {
+          rows: [
+            { ...row("alpha"), recencyAt: 300 },
+            { ...row("bravo"), recencyAt: 200 },
+          ],
+          nextCursor: "native-tail",
+        };
+      }
+      tailEntered.resolve();
+      await tail.promise;
+      return { rows: [row("charlie")] };
+    });
+    const index = new CodexCatalogIndex({
+      homeId: "cold-backward-archive",
+      readNative,
+      assertCurrent: () => {},
+    });
+    try {
+      const first = await index.list({ limit: 1 });
+      await tailEntered.promise;
+      const second = await index.list({ limit: 1, cursor: first.nextCursor });
+      expect(second.sessions.map((session) => session.threadId)).toEqual(["bravo"]);
+      expect(second.backwardsCursor).toEqual(expect.any(String));
+      index.archive("bravo");
+      const previous = await index.list({ limit: 1, cursor: second.backwardsCursor });
+      expect(previous.sessions.map((session) => session.threadId)).toEqual(["alpha"]);
+      expect(previous.nextCursor).toEqual(expect.any(String));
+
+      tail.resolve();
+      await index.initialize();
+      const following = await index.list({ limit: 1, cursor: previous.nextCursor });
+      expect(following.sessions.map((session) => session.threadId)).toEqual(["charlie"]);
+      expect(following.nextCursor).toBeUndefined();
+      expect(readNative).toHaveBeenCalledTimes(2);
+    } finally {
+      tail.resolve();
+      await index.close();
+    }
+  });
+
   it("shares one native first page among four cold callers without returning false empty results", async () => {
     const entered = createDeferred<void>();
     const release = createDeferred<void>();

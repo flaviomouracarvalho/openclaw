@@ -160,3 +160,76 @@ it("invalidates saved completeness when an admitted deletion fails during shutdo
     await recovered.close();
   }
 });
+
+it("persists archives received before saved snapshot rows are restored", async () => {
+  const home = tempDirs.make("codex-catalog-archive-during-restore-");
+  const startOptions: CodexAppServerStartOptions = {
+    transport: "stdio",
+    command: "codex",
+    args: ["app-server"],
+    env: { CODEX_HOME: home },
+    headers: {},
+  };
+  const homeId = await codexCatalogResidentHomeKey({ startOptions });
+  const openState = () =>
+    createPluginStateKeyedStoreForTests<StoredCodexCatalogEntry>("codex", {
+      namespace: "archive-during-snapshot-restore",
+      maxEntries: 20_001,
+    });
+  const archived = idleThread({ id: "archived-during-restore", source: "cli" });
+  const current = idleThread({ id: "still-current", source: "cli" });
+  let nativeRows: CodexThread[] = [archived, current];
+  const readNative = vi.fn(async () =>
+    projectCodexCatalogPage({ data: nativeRows }, { sanitize: sanitizeTerminalText }),
+  );
+  const createIndex = (state = openState()) =>
+    new CodexCatalogIndex({ homeId, state, readNative, assertCurrent: () => {} });
+  const original = createIndex();
+  try {
+    await original.initialize();
+    expect((await original.list({})).sessions).toHaveLength(2);
+  } finally {
+    await original.close();
+  }
+  await closeOpenClawStateDatabaseAsync();
+
+  const captured = createDeferred<void>();
+  const release = createDeferred<void>();
+  const state = openState();
+  const realEntries = state.entries;
+  vi.spyOn(state, "entries").mockImplementation(async () => {
+    const entries = await realEntries();
+    captured.resolve();
+    await release.promise;
+    return entries;
+  });
+  const restoring = createIndex(state);
+  const harness = createClientHarness();
+  let listed: ReturnType<CodexCatalogIndex["list"]> | undefined;
+  try {
+    await observeCodexCatalogClient(harness.client, { startOptions });
+    listed = restoring.list({});
+    void listed.catch(() => undefined);
+    await captured.promise;
+    nativeRows = [current];
+    harness.send({ method: "thread/archived", params: { threadId: archived.id } });
+    release.resolve();
+    expect((await listed).sessions.map((row) => row.threadId)).toEqual([current.id]);
+    await restoring.initialize();
+  } finally {
+    release.resolve();
+    await listed?.catch(() => undefined);
+    await restoring.close();
+    await harness.client.closeAndWait();
+  }
+  await closeOpenClawStateDatabaseAsync();
+
+  readNative.mockClear();
+  const recovered = createIndex();
+  try {
+    expect((await recovered.list({})).sessions.map((row) => row.threadId)).toEqual([current.id]);
+    expect(readNative).not.toHaveBeenCalled();
+  } finally {
+    await recovered.close();
+  }
+});

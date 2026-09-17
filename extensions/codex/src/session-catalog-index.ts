@@ -671,6 +671,8 @@ export class CodexCatalogIndex {
     const row = this.rows.get(threadId);
     if (row) {
       this.put({ ...row, archived: true });
+    } else {
+      this.persistence.remove(threadId);
     }
   }
 
