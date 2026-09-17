@@ -126,6 +126,7 @@ export type SlackActionContext = {
   /** Allowed local media directories for file uploads. */
   mediaLocalRoots?: readonly string[];
   mediaReadFile?: (filePath: string) => Promise<Buffer>;
+  assertDirectAdapterHandoff?: ChannelMessageActionContext["assertDirectAdapterHandoff"];
   /** Slack-private ordered delivery plan prepared after presentation normalization. */
   preparedMessages?: readonly SlackReplyDeliveryMessage[];
 };
@@ -572,6 +573,7 @@ export async function handleSlackAction(
       ...(accountId ? { accountId } : {}),
       ...(tokenOverride ? { token: tokenOverride } : {}),
       teamId,
+      assertDirectAdapterHandoff: context?.assertDirectAdapterHandoff,
     };
   };
 

@@ -36,9 +36,16 @@ export function createMessageToolGateway(
   invocation?: {
     resolveConfig: () => OpenClawConfig;
     preserveWriteOutcome: boolean;
+    hasScheduledAuthority: boolean;
   },
 ): MessageActionGateway | undefined {
   const gatewayOpts = readGatewayCallOptions(params);
+  if (
+    invocation?.hasScheduledAuthority &&
+    (gatewayOpts.gatewayUrl?.trim() || gatewayOpts.gatewayToken?.trim())
+  ) {
+    throw new Error("Scheduled message actions cannot override Gateway routing.");
+  }
   if (options?.conversationReadOrigin === "direct-operator") {
     return undefined;
   }

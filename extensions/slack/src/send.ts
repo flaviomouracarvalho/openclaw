@@ -39,7 +39,12 @@ import {
   uploadSlackFile,
   withSlackDnsRequestRetry,
 } from "./client-delivery.js";
-import { createSlackReadClient, createSlackTokenCacheKey, getSlackWriteClient } from "./client.js";
+import {
+  createSlackReadClient,
+  createSlackTokenCacheKey,
+  createSlackWriteClient,
+  getSlackWriteClient,
+} from "./client.js";
 import { assertSlackDetachedTargetAllowed } from "./detached-target-admission.js";
 import { chunkSlackMrkdwnText, markdownToSlackMrkdwnChunks } from "./format.js";
 import { SLACK_EDIT_TEXT_MAX_BYTES, SLACK_TEXT_LIMIT } from "./limits.js";
@@ -143,6 +148,8 @@ type SlackSendOpts = {
   deliveryQueueId?: string;
   /** Refresh durable timing after the per-target queue and before Slack API work. */
   onPlatformSendDispatch?: () => Promise<void>;
+  /** Host-owned live request authority for every Slack write attempt. */
+  assertDirectAdapterHandoff?: () => void;
   /** Persist each concrete platform send before any later chunk can fail. */
   onDeliveryResult?: (result: SlackSendResult) => Promise<void> | void;
 };
@@ -438,10 +445,19 @@ function resolveSlackDelivery(params: {
         ? params.account.userTokenSource
         : params.account.botTokenSource,
   });
+  const actionClient = params.opts.assertDirectAdapterHandoff
+    ? createSlackWriteClient(
+        credential,
+        { teamId: params.recipient.teamId },
+        params.opts.assertDirectAdapterHandoff,
+      )
+    : undefined;
   return Object.freeze({
-    client: params.recipient.teamId
-      ? getSlackWriteClient(credential, { teamId: params.recipient.teamId })
-      : (params.opts.client ?? getSlackWriteClient(credential)),
+    client:
+      actionClient ??
+      (params.recipient.teamId
+        ? getSlackWriteClient(credential, { teamId: params.recipient.teamId })
+        : (params.opts.client ?? getSlackWriteClient(credential))),
     credential,
     identity: resolveSlackSendIdentity({
       accountId: params.account.accountId,

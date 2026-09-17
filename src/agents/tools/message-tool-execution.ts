@@ -409,6 +409,7 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
       const gateway = createMessageToolGateway(params, gatewayContext, signal, {
         resolveConfig: () => cfg,
         preserveWriteOutcome: Boolean(messageActionAuthorization.scheduled && !scheduledRead),
+        hasScheduledAuthority: Boolean(messageActionAuthorization.scheduled),
       });
       decisions.runBoundary(() =>
         validateExplicitMessageAccountSelection({

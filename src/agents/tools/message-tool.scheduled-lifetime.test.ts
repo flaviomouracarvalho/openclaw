@@ -108,13 +108,19 @@ it("fences later scheduled sends while preserving an accepted send", async () =>
       }),
     });
     catalog.push(tool);
-    const send = (callId: string, message: string) =>
+    const send = (callId: string, message: string, gatewayUrl?: string) =>
       tool.execute(callId, {
         action: "send",
         channel: "discord",
         target: "channel:100000000000000001",
         message,
+        ...(gatewayUrl ? { gatewayUrl } : {}),
       });
+
+    await expect(send("explicit-gateway", "blocked", "ws://127.0.0.1:18789")).rejects.toThrow(
+      "Scheduled message actions cannot override Gateway routing",
+    );
+    expect(sendText).not.toHaveBeenCalled();
 
     pending = send("accepted-before-revocation", "first");
     void pending.catch(() => undefined);
