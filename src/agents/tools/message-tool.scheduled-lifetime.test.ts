@@ -1,5 +1,6 @@
 import { expect, it, vi } from "vitest";
 import { createDeferred, withTestTimeout } from "../../../test/helpers/promise.js";
+import type { ChannelOutboundContext } from "../../channels/plugins/outbound.types.js";
 import type { ChannelPlugin } from "../../channels/plugins/types.public.js";
 import {
   clearRuntimeConfigSnapshot,
@@ -46,7 +47,7 @@ it("fences later scheduled sends while preserving an accepted send", async () =>
     };
     setRuntimeConfigSnapshot(config, config);
     const sends: string[] = [];
-    const sendText = vi.fn<NonNullable<ChannelPlugin["outbound"]>["sendText"]>(async ({ text }) => {
+    const sendText = vi.fn(async ({ text }: ChannelOutboundContext) => {
       sends.push(text);
       sendEntered.resolve();
       await releaseSend.promise;
