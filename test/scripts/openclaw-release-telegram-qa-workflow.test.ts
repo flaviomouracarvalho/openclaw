@@ -226,6 +226,7 @@ function runCandidateProvenance(
   provenanceBlock: ProvenanceBlock,
   params: {
     branchHeads?: string[];
+    releaseCompareStatus?: "ahead" | "behind" | "diverged" | "identical";
     candidateVersion?: string;
     messageHeadline?: string;
     directPullRequest?: {
@@ -316,6 +317,7 @@ set -euo pipefail
 if [[ "$*" == *"number="* ]]; then printf '%s\\n' "$FAKE_DIRECT_PR"; exit 0; fi
 if [[ "$*" == *"api graphql"* ]]; then printf '%s\\n' "$FAKE_METADATA"; exit 0; fi
 if [[ "$*" == *"/branches-where-head"* ]]; then printf '%s\\n' "$FAKE_BRANCH_HEADS"; exit 0; fi
+if [[ "$*" == *"/compare/"*"...$FAKE_REMOTE_SHA"* ]]; then printf '%s\\n' "$FAKE_RELEASE_COMPARE_STATUS"; exit 0; fi
 if [[ "$*" == *"/compare/"* ]]; then printf '%s\\n' "behind"; exit 0; fi
 if [[ "$*" == *"/collaborators/"*"/permission"* ]]; then printf '%s\\n' "$FAKE_PERMISSION"; exit 0; fi
 exit 64
@@ -363,6 +365,7 @@ exit 64
         permission: params.permission === "admin" ? "admin" : "write",
         role_name: params.permission ?? "maintain",
       }),
+      FAKE_RELEASE_COMPARE_STATUS: params.releaseCompareStatus ?? "diverged",
       FAKE_REMOTE_REF: remoteRef,
       FAKE_REMOTE_SHA: params.remoteSha ?? candidateSha,
       CANDIDATE_GIT_DIR:
@@ -571,6 +574,58 @@ describe("release Telegram QA workflow", () => {
         });
         expect(rejected.status, `${provenanceBlock.stepName}: ${candidateVersion}`).toBe(1);
         expect(rejected.stderr).toContain("PATCH >= 33");
+      }
+    }
+  });
+
+  it("keeps exact release candidates trusted when the canonical branch advances", () => {
+    for (const provenanceBlock of PROVENANCE_BLOCKS) {
+      for (const targetContextRef of ["release/2026.7.35", "extended-stable/2026.7.33"]) {
+        for (const signature of ["maintainer", "web-flow", "missing"] as const) {
+          const result = runCandidateProvenance(provenanceBlock, {
+            candidateVersion: "2026.7.35",
+            remoteSha: "b".repeat(40),
+            releaseCompareStatus: "ahead",
+            targetContextRef,
+            signature,
+            mergedPullRequests: [{ baseRefName: targetContextRef }],
+          });
+          expect(result.status, `${provenanceBlock.stepName}/${signature}: ${result.stderr}`).toBe(
+            0,
+          );
+          expect(result.stdout).toContain(
+            "Telegram candidate trust reason: release-branch-ancestor",
+          );
+        }
+      }
+    }
+  });
+
+  it("rejects untrusted or uncontained candidates after the release branch advances", () => {
+    const cases = [
+      { releaseCompareStatus: "behind" as const },
+      { releaseCompareStatus: "diverged" as const },
+      { targetRef: "extended-stable/2026.7.33" },
+      { remoteSha: "" },
+      { openPr: true },
+      { signature: "invalid" as const },
+      { permission: "write" as const },
+      { mergedPullRequests: [] },
+      { mergedPullRequests: [{ mergeCommitOid: "c".repeat(40) }] },
+      { mergedPullRequests: [{ baseRepository: "fork/openclaw" }] },
+    ];
+    for (const provenanceBlock of PROVENANCE_BLOCKS) {
+      for (const params of cases) {
+        const result = runCandidateProvenance(provenanceBlock, {
+          candidateVersion: "2026.7.35",
+          remoteSha: "b".repeat(40),
+          releaseCompareStatus: "ahead",
+          targetContextRef: "extended-stable/2026.7.33",
+          signature: "web-flow",
+          mergedPullRequests: [{ baseRefName: "extended-stable/2026.7.33" }],
+          ...params,
+        });
+        expect(result.status, `${provenanceBlock.stepName}: ${JSON.stringify(params)}`).not.toBe(0);
       }
     }
   });

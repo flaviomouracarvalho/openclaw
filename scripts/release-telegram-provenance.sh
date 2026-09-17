@@ -130,6 +130,20 @@ if [[ -n "$context_release_branch" ]]; then
   if [[ "$branch_sha" == "$candidate_sha" ]]; then
     trusted_reason="release-branch-head"
     trusted_release_branch="$context_release_branch"
+  elif [[ "$branch_sha" =~ ^[a-f0-9]{40}$ &&
+          "$TARGET_REF" =~ ^[a-f0-9]{40}$ && "$TARGET_REF" == "$candidate_sha" ]]; then
+    # A build must not lose its frozen candidate merely because the canonical
+    # branch advanced. Compare immutable commits, never replace the candidate
+    # with the new tip; signature/merge attribution is still checked below.
+    release_compare_status="$(
+      gh_with_retry api \
+        "repos/${GITHUB_REPOSITORY}/compare/${candidate_sha}...${branch_sha}" \
+        --jq '.status'
+    )"
+    if [[ "$release_compare_status" == "ahead" ]]; then
+      trusted_reason="release-branch-ancestor"
+      trusted_release_branch="$context_release_branch"
+    fi
   fi
 elif [[ -n "$context_release_tag" ]]; then
   tag_refs="$(
@@ -231,8 +245,9 @@ if [[ "$trusted_reason" != "main-ancestor" ]]; then
   fi
   permission_actor="$signer"
   if [[ "$signature_status" == "missing" || "$signer" == "web-flow" ]]; then
-    if [[ "$trusted_reason" != "release-branch-head" || -z "$trusted_release_branch" ]]; then
-      echo "Unsigned or GitHub web-flow candidates require an exact release branch head." >&2
+    if [[ ( "$trusted_reason" != "release-branch-head" &&
+            "$trusted_reason" != "release-branch-ancestor" ) || -z "$trusted_release_branch" ]]; then
+      echo "Unsigned or GitHub web-flow candidates require canonical release branch provenance." >&2
       exit 1
     fi
     merge_pr_candidates="$(jq -c '.data.repository.object.associatedPullRequests.nodes' <<<"$candidate_metadata_json")"
