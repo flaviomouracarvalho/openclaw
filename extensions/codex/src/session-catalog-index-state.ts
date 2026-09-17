@@ -44,7 +44,7 @@ export function codexCatalogMetadataPage(page: CodexSessionCatalogPage): CodexSe
   };
 }
 
-export function readStoredCodexCatalogRow(value: unknown): CodexCatalogIndexRow | undefined {
+function readStoredCodexCatalogRow(value: unknown): CodexCatalogIndexRow | undefined {
   if (!isRecord(value) || value.version !== 1 || value.kind !== "row" || !isRecord(value.row)) {
     return undefined;
   }
