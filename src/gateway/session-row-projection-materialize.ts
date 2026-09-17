@@ -44,6 +44,8 @@ export function readResidentSessionRow(params: {
     store: source?.store ?? {},
     storePath: row.storeTarget.storePath,
     storeAgentId: row.storeTarget.agentId,
+    // Cache stored fallback facts independently of the live activity chosen at presentation.
+    active: source ? undefined : false,
     activeModel: source ? undefined : (row.fallbackModel ?? null),
     modelCatalog: params.modelCatalog,
     modelSource: {
