@@ -8,7 +8,12 @@ import { runInitialConfigWriteHealth } from "../flows/doctor-health-contribution
 import { readConfigMachineState } from "../state/config-machine-state.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { withEnvAsync } from "../test-utils/env.js";
+import { getFreePort } from "../test-utils/ports.js";
 import { prepareDoctorContext } from "./doctor-config-flow.test-support.js";
+import {
+  createBuiltRuntime,
+  runBuiltRuntime,
+} from "./doctor-config-preflight.process.test-support.js";
 import { withDoctorConfigPreflightHome } from "./doctor-config-preflight.test-support.js";
 
 async function repairConfig(configPath: string) {
@@ -56,12 +61,33 @@ describe("Doctor legacy config composition", () => {
         if (explicitModel) {
           raw.agents.defaults.memorySearch.local = { modelPath: "/synthetic/embedding.gguf" };
         }
+        raw.gateway.port = await getFreePort();
         const configPath = await writeOpenClawConfig(home, raw);
-        expect((await readConfigFileSnapshot()).valid).toBe(false);
-        await repairConfig(configPath);
+        const runtimeRoot = createBuiltRuntime(path.join(home, "cli"));
+        const env: NodeJS.ProcessEnv = {
+          PATH: process.env.PATH,
+          SystemRoot: process.env.SystemRoot,
+          WINDIR: process.env.WINDIR,
+          ComSpec: process.env.ComSpec,
+          HOME: home,
+          USERPROFILE: home,
+          TMPDIR: home,
+          OPENCLAW_STATE_DIR: path.dirname(configPath),
+          OPENCLAW_CONFIG_PATH: configPath,
+          NO_COLOR: "1",
+        };
+        const run = (args: string[], expected = 0) => {
+          const result = runBuiltRuntime(runtimeRoot, env, args, 60_000);
+          const output = `${result.stdout}\n${result.stderr}`;
+          expect(result.error, output).toBeUndefined();
+          expect(result.status, output).toBe(expected);
+        };
+        const doctorArgs = ["doctor", "--fix", "--non-interactive", "--no-workspace-suggestions"];
+        run(["config", "validate"], 1);
+        run(doctorArgs);
         const first = await fs.readFile(configPath, "utf8");
         const saved = JSON.parse(first);
-        expect((await readConfigFileSnapshot()).valid).toBe(true);
+        run(["config", "validate"]);
         expect(saved.agents).not.toHaveProperty("list");
         expect(saved.agents.ownership).toBe("explicit");
         expect(Object.keys(saved.agents.entries)).toEqual(["main", "research"]);
@@ -81,7 +107,7 @@ describe("Doctor legacy config composition", () => {
         expect(saved.plugins.entries.browser.enabled).toBe(true);
         expect(saved.meta).not.toHaveProperty("lastTouchedAt");
         expect(saved.gateway.tailscale).not.toHaveProperty("resetOnExit");
-        expect((await repairConfig(configPath)).shouldWriteConfig).toBe(false);
+        run(doctorArgs);
         expect(await fs.readFile(configPath, "utf8")).toBe(first);
       });
     },

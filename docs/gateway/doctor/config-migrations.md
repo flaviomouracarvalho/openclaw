@@ -76,11 +76,15 @@ beyond the grace period.
 
 ## Replay a July 2026 config upgrade
 
-From a source checkout, run:
+From a source checkout with its pnpm dependencies installed, run:
 
 ```bash
 node scripts/doctor-config-upgrade-replay.mjs
 ```
+
+The driver runs with plain Node and imports only Node built-ins. It requires
+the checkout's fixture and `pnpm openclaw` build wrapper; an installed npm
+package alone cannot run this replay. No `tsx` invocation is needed for the driver.
 
 The replay uses the synthetic `test/fixtures/doctor-2026.7.1.json` config. It
 builds through `pnpm openclaw`, isolates the home, state, config, and logs under

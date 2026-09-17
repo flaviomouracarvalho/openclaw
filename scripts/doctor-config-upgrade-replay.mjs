@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 // Replay the shipped July config shape through the dist-backed CLI in isolated state.
+// Requires a source checkout with its pnpm dependencies; this is not a packaged CLI command.
 import assert from "node:assert/strict";
 import { spawn, spawnSync } from "node:child_process";
 import { once } from "node:events";
