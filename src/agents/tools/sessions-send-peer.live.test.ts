@@ -15,6 +15,11 @@ import {
 const enabled = isLiveTestEnabled() && isTruthyEnvValue(process.env.OPENCLAW_LIVE_SUBAGENT_STRESS);
 const describeLive = enabled ? describe : describe.skip;
 
+function isForwardedPeerMessage(message: Record<string, unknown>): boolean {
+  const provenance = asOptionalRecord(message.provenance);
+  return provenance?.kind === "inter_session" && provenance.sourceTool === "sessions_send";
+}
+
 describeLive("OpenAI independent peer coordination", () => {
   it(
     "keeps five alternating peer replies visible after a nonblocking send",
@@ -91,9 +96,6 @@ describeLive("OpenAI independent peer coordination", () => {
               ],
             ] as const) {
               const messages = await history(sessionKey);
-              expect(finalReplies(messages, ""), "exactly five alternating replies").toEqual(
-                expectedReplies,
-              );
               const projected = await gateway.request<{ messages: unknown[] }>("chat.history", {
                 sessionKey,
                 limit: 80,
@@ -102,15 +104,31 @@ describeLive("OpenAI independent peer coordination", () => {
                 const message = asOptionalRecord(value);
                 return message ? [message] : [];
               });
-              expect(finalReplies(visible, ""), "peer answers remain visible").toEqual(
+              const visiblePeerInputs = visible.filter(isForwardedPeerMessage);
+              const visibleOwnReplies = finalReplies(
+                visible.filter((message) => !isForwardedPeerMessage(message)),
+                "",
+              );
+              record("peer-exchange-observed", {
+                sessionKey,
+                replies: finalReplies(messages, ""),
+                visibleOwnReplies,
+                projectedMessages: visible,
+              });
+              expect(finalReplies(messages, ""), "exactly five alternating replies").toEqual(
+                expectedReplies,
+              );
+              expect(visibleOwnReplies, "peer answers remain visible").toEqual(
                 expectedReplies.filter((reply) => reply !== "ANNOUNCE_SKIP"),
               );
               const peerInputs = messages.filter(
-                (message) =>
-                  message.role === "user" &&
-                  asOptionalRecord(message.provenance)?.sourceTool === "sessions_send",
+                (message) => message.role === "user" && isForwardedPeerMessage(message),
               );
-              for (const input of peerInputs) {
+              expect(peerInputs).toHaveLength(incoming.length + (sessionKey === peerKey ? 1 : 0));
+              expect(visiblePeerInputs, "every peer input remains visible").toHaveLength(
+                peerInputs.length,
+              );
+              for (const input of [...peerInputs, ...visiblePeerInputs]) {
                 expect(input.provenance).toMatchObject({
                   kind: "inter_session",
                   sourceSessionKey: sourceKey,
@@ -118,16 +136,20 @@ describeLive("OpenAI independent peer coordination", () => {
                 });
                 expect(asOptionalRecord(input.provenance)?.sourceRole).toBeUndefined();
               }
+              for (const input of visiblePeerInputs) {
+                expect(input).toMatchObject({
+                  role: "assistant",
+                  senderSession: { sessionKey: sourceKey },
+                });
+              }
               for (const turn of incoming) {
                 const input = peerInputs.filter((message) =>
                   JSON.stringify(message.content).includes(`${prefix}${turn}`),
                 );
                 expect(input, "each preceding reply is delivered once").toHaveLength(1);
                 expect(
-                  visible.filter(
-                    (message) =>
-                      message.role === "user" &&
-                      JSON.stringify(message.content).includes(`${prefix}${turn}`),
+                  visiblePeerInputs.filter((message) =>
+                    JSON.stringify(message.content).includes(`${prefix}${turn}`),
                   ),
                   "peer input remains visible",
                 ).toHaveLength(1);
@@ -139,11 +161,6 @@ describeLive("OpenAI independent peer coordination", () => {
                 ),
                 "the Gateway forwards replies without another model messaging call",
               ).toHaveLength(sessionKey === parentKey ? 1 : 0);
-              record("peer-exchange-complete", {
-                sessionKey,
-                replies: finalReplies(messages, ""),
-                visibleReplies: finalReplies(visible, ""),
-              });
             }
             expect(gate.snapshot()).toEqual({ requests: 1, waiting: 0, released: true });
           } finally {
