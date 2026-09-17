@@ -1,5 +1,6 @@
 import { setImmediate as nextTurn } from "node:timers/promises";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import * as terminalText from "openclaw/plugin-sdk/text-chunking";
 import { expect, it, vi } from "vitest";
 import type { CodexThreadListResponse } from "./app-server/protocol.js";
 import { createClientHarness } from "./app-server/test-support.js";
@@ -71,7 +72,9 @@ it("reconciles remote membership without reparsing unchanged visible or hidden p
       "removed",
     ]);
     expect(commandRpcMocks.codexControlRequest).toHaveBeenCalledOnce();
-    Object.defineProperty(known, "preview", { get: preview });
+    const knownPreview = known.preview;
+    const sanitize = vi.spyOn(terminalText, "sanitizeTerminalText");
+    Object.defineProperty(known, "preview", { get: () => knownPreview });
     Object.defineProperty(hidden, "preview", { get: preview });
     known.name = null;
     known.status = { type: "idle" };
@@ -120,6 +123,7 @@ it("reconciles remote membership without reparsing unchanged visible or hidden p
       useStateDbOnly: true,
     });
     expect(preview).not.toHaveBeenCalled();
+    expect(sanitize.mock.calls.map(([value]) => value)).not.toContain(knownPreview);
   } finally {
     try {
       await factory.stop();

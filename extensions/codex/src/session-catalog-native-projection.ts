@@ -47,28 +47,37 @@ export function projectCodexCatalogNativeResponse(
       throw new Error("Codex catalog response contains an invalid thread");
     }
     const id = boundedCatalogString(thread.id, MAX_SESSION_ID_LENGTH);
-    if (!id) throw new Error("Codex catalog response contains an invalid thread id");
+    if (!id) {
+      throw new Error("Codex catalog response contains an invalid thread id");
+    }
     const row: JsonObject = { id: Buffer.from(id, "utf16le").toString("utf16le") };
-    if (thread.ephemeral === true) return { ...row, ephemeral: true };
+    if (thread.ephemeral === true) {
+      return { ...row, ephemeral: true };
+    }
     for (const [field, limit, overflow] of STRING_FIELDS) {
       const value = thread[field];
       const bounded = copyString(value, limit, overflow);
-      if (value === null || bounded !== undefined) row[field] = bounded ?? null;
+      if (value === null || bounded !== undefined) {
+        row[field] = bounded ?? null;
+      }
     }
     if (typeof thread.path === "string") {
       if (thread.path.length > MAX_CWD_LENGTH) {
         throw new Error("Codex catalog rollout path exceeds its length limit");
       }
       row.path = Buffer.from(thread.path, "utf16le").toString("utf16le");
-    } else if (thread.path === null) row.path = null;
+    } else if (thread.path === null) {
+      row.path = null;
+    }
     if (typeof thread.originator === "string") {
       // Provenance tests exact native identity, unlike trimmed display metadata.
       row.originator = Buffer.from(thread.originator.slice(0, 500), "utf16le").toString("utf16le");
     }
     for (const field of ["createdAt", "updatedAt", "recencyAt"] as const) {
       const value = thread[field];
-      if (value === null || (typeof value === "number" && Number.isFinite(value)))
+      if (value === null || (typeof value === "number" && Number.isFinite(value))) {
         row[field] = value;
+      }
     }
     const preview = cachedPreview?.({
       id,
@@ -76,14 +85,20 @@ export function projectCodexCatalogNativeResponse(
       updatedAt: typeof row.updatedAt === "number" ? row.updatedAt : null,
       recencyAt: typeof row.recencyAt === "number" ? row.recencyAt : null,
     });
-    if (preview !== undefined && preview.length <= 500) {
+    const rawPreview = thread.preview;
+    if (
+      preview !== undefined &&
+      preview.length <= 500 &&
+      !(typeof rawPreview === "string" && Boolean(rawPreview) !== Boolean(preview))
+    ) {
       row.preview = preview;
-    } else if (typeof thread.preview === "string") {
-      row.preview = truncateCodexCatalogPreview(
-        selectCodexCatalogPreviewInput(thread.preview),
-        sanitize,
-      );
-    } else if (thread.preview === null) row.preview = null;
+    } else if (typeof rawPreview === "string") {
+      row.preview = rawPreview
+        ? truncateCodexCatalogPreview(selectCodexCatalogPreviewInput(rawPreview), sanitize)
+        : "";
+    } else if (rawPreview === null) {
+      row.preview = null;
+    }
     const source = typeof thread.source === "string" ? thread.source : undefined;
     if (source !== undefined && source.length <= 500) {
       row.source = Buffer.from(source, "utf16le").toString("utf16le");
@@ -96,7 +111,9 @@ export function projectCodexCatalogNativeResponse(
     }
     if (isJsonObject(thread.gitInfo)) {
       const branch = copyString(thread.gitInfo.branch, 500);
-      if (branch !== undefined) row.gitInfo = { branch };
+      if (branch !== undefined) {
+        row.gitInfo = { branch };
+      }
     }
     if (isJsonObject(thread.status)) {
       const type = thread.status.type;
@@ -116,8 +133,9 @@ export function projectCodexCatalogNativeResponse(
   const page: JsonObject = { data };
   for (const field of ["nextCursor", "backwardsCursor"] as const) {
     const value = response[field];
-    if (value === null) page[field] = null;
-    else if (value !== undefined) {
+    if (value === null) {
+      page[field] = null;
+    } else if (value !== undefined) {
       if (typeof value !== "string" || value.length > MAX_CURSOR_LENGTH) {
         throw new Error("Codex catalog response contains an invalid cursor");
       }

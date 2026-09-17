@@ -23,6 +23,28 @@ export class CodexCatalogOrdering {
     this.nextEventOrder = Math.min(this.nextEventOrder, (row.sourceOrder ?? 0) - 1);
   }
 
+  reserveEvent(): number {
+    return this.nextEventOrder--;
+  }
+
+  evictionCandidate(
+    rows: ReadonlyMap<string, CodexCatalogIndexRow>,
+  ): CodexCatalogIndexRow | undefined {
+    if (rows.size <= CODEX_CATALOG_MAX_ROWS) {
+      return undefined;
+    }
+    let oldest: CodexCatalogIndexRow | undefined;
+    for (const row of rows.values()) {
+      if (
+        !oldest ||
+        (row.archived !== oldest.archived ? row.archived : compareCodexCatalogRows(row, oldest) > 0)
+      ) {
+        oldest = row;
+      }
+    }
+    return oldest;
+  }
+
   private unchangedPosition(row: CodexCatalogIndexRow, previous?: CodexCatalogIndexRow) {
     return previous && codexCatalogRowRecency(row) <= codexCatalogRowRecency(previous)
       ? previous.sourceOrder
@@ -30,7 +52,7 @@ export class CodexCatalogOrdering {
   }
 
   position(row: CodexCatalogIndexRow, previous?: CodexCatalogIndexRow): number {
-    return row.sourceOrder ?? this.unchangedPosition(row, previous) ?? this.nextEventOrder--;
+    return row.sourceOrder ?? this.unchangedPosition(row, previous) ?? this.reserveEvent();
   }
 
   captureBatch(hasRows: boolean) {

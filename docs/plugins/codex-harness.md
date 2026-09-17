@@ -30,6 +30,8 @@ the sub-second order that the protocol rounds to seconds. Unchanged rows keep
 their positions across background refreshes, so existing cursors do not repeat
 or skip them. Newly discovered or newly active rows receive fresh positions ahead
 of an existing timestamp tie, preserving native order within each discovery batch.
+An observed turn start also receives a fresh position when its recency falls in
+the same exposed timestamp second as earlier activity.
 
 Explicit homes hydrate in the background when the plugin activates. An implicit
 process home waits for an authorized catalog request. A home without a saved
@@ -57,6 +59,13 @@ Status resets to **Stored / activity unknown** after restart or when its final
 observing connection closes, until fresh native events or metadata supply current
 status. Late responses from a closed connection cannot restore its active status.
 No native rollouts or transcripts are copied into the state database.
+Live workspace and model-provider settings also stay in memory, with at most
+64 supporting native connections per row. Settings notifications and successful
+resume acknowledgements update this overlay immediately; both cwd filtering and
+display use it. Native metadata refreshes cannot overwrite it, and closing its
+last supporting connection or receiving that connection's `notLoaded` event
+restores the stored metadata. Resume publication uses
+the response's current cwd, which can differ from the thread's persisted cwd.
 For remote app-servers without local filesystem access, the saved snapshot is
 available immediately and a background native walk reconciles changes made while
 the Gateway was stopped or its app-server connection was unavailable. Every
@@ -65,7 +74,9 @@ Unchanged display rows reuse their bounded previews; only new or changed rows
 need preview projection. Unchanged rows are not rewritten to SQLite.
 
 Native lifecycle notifications update affected threads, and successful catalog
-archives immediately hide their rows. A debounced recursive directory watcher
+archives immediately hide their rows. Turn starts and completions coalesce
+single-thread metadata refreshes, so a running turn advances recency before it
+finishes. A debounced recursive directory watcher
 and a 30-second stat-only scan discover external rollout changes. The scan streams
 directory entries and retains at most 20,000 file fingerprints while separately
 checking the presence of resident paths. Only changed or
@@ -74,8 +85,15 @@ or a bounded 128 KiB compressed head. A missing first-user preview stays missing
 until a later change makes it discoverable. Native titles are preserved when a
 rollout has no title. A bounded read that cannot reach the first user message
 preserves its previously known preview. Immutable, unmodified rollouts cause no content reads.
-File rewrites do not advance activity recency; only observed turn starts can
-advance the existing native value. Name and status observations have independent
+File-only rows remain provisional until native metadata arrives. After native
+publication, changed rollout headers cannot replace the selected workspace or
+native display metadata and `updatedAt`. A changed selected file can refresh its
+bounded first-user preview; a bounded read that misses it retains the known preview.
+Explicit native empty previews clear the stored fallback. Empty/nonempty preview
+transitions remain visible even within one exposed timestamp second. Scans advance
+recency only from parsed turn-start facts. This authority flag survives SQLite restore;
+obsolete cached rows without it are discarded and pruned in the background before
+rehydration. Name, status, and live-settings observations have independent
 ordering, so a newer file update can coexist with a concurrent rename. Older
 native metadata responses cannot overwrite newer file updates or removals.
 Interrupted updates and transient file-read failures remain eligible for the next scan, even when
@@ -86,7 +104,7 @@ Codex owns the selected rollout path. Retained files from an earlier revert
 cannot replace the current session's path or metadata during a filesystem scan.
 
 Each home retains at most 20,000 display rows, 20,000 live-status records,
-20,000 name records, and 20,000 scan fingerprints, matching the existing Codex
+20,000 live-settings records, 20,000 name records, and 20,000 scan fingerprints, matching the existing Codex
 managed-thread ceiling; eviction drops the oldest archived rows first, then the
 oldest remaining rows. Native walks finish pagination, but rows beyond the
 resident limit are not projected. Plugin state also has its shared capacity limit. Persistence failure

@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
@@ -29,6 +30,53 @@ const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => vi.restoreAllMocks());
 
 describe("resident Codex catalog SQLite durability", () => {
+  it("prunes obsolete cached rows in background before native hydration without deleting fresh replacements", async () => {
+    const state = createPluginStateKeyedStoreForTests<StoredCodexCatalogEntry>("codex", {
+      namespace: "resident-obsolete-authority-test",
+      maxEntries: 20_001,
+    });
+    const native = idleThread({ id: "fresh", source: "cli", preview: "Current native request" });
+    const projected = await projectCodexCatalogPage(
+      { data: [native] },
+      { sanitize: sanitizeTerminalText },
+    );
+    const legacy = structuredClone(projected.rows[0]!);
+    Reflect.deleteProperty(legacy, "nativeMetadata");
+    await state.register("obsolete-cache-key", { version: 1, kind: "row", row: legacy });
+    const freshKey = `thread:${createHash("sha256").update(native.id).digest("hex")}`;
+    await state.register(freshKey, { version: 1, kind: "row", row: legacy });
+    await state.register("complete", { version: 1, kind: "complete" });
+    const deletes = vi.spyOn(state, "delete");
+    const readNative = vi.fn(async () => {
+      expect(await state.entries()).not.toEqual(
+        expect.arrayContaining([expect.objectContaining({ key: "obsolete-cache-key" })]),
+      );
+      return projected;
+    });
+    const index = new CodexCatalogIndex({
+      homeId: "obsolete-authority",
+      state,
+      readNative,
+      assertCurrent: () => {},
+    });
+    try {
+      expect((await index.list({})).sessions).toEqual([]);
+      expect(deletes).not.toHaveBeenCalled();
+      expect(readNative).not.toHaveBeenCalled();
+      await index.upsertThread(native);
+      await index.initialize();
+      expect(deletes).toHaveBeenCalledWith("obsolete-cache-key");
+      expect(deletes).not.toHaveBeenCalledWith(freshKey);
+      expect((await index.list({})).sessions[0]?.threadId).toBe("fresh");
+      const persisted = (await state.entries()).flatMap((entry) =>
+        entry.value.kind === "row" ? [entry.value.row] : [],
+      );
+      expect(persisted).toMatchObject([{ threadId: "fresh", nativeMetadata: true }]);
+    } finally {
+      await index.close();
+    }
+  });
+
   it("keeps the persisted selected rollout eligible while older files and a native revert reconcile", async () => {
     const home = tempDirs.make("codex-selected-rollout-");
     const root = path.join(home, "sessions");
@@ -183,12 +231,15 @@ describe("resident Codex catalog SQLite durability", () => {
         namespace: "resident-restart-test",
         maxEntries: 20_001,
       });
-    const readNative = vi.fn(async () =>
-      projectCodexCatalogPage(
+    const nativeAllowed = createDeferred<void>();
+    let paused = false;
+    const readNative = vi.fn(async () => {
+      if (paused) await nativeAllowed.promise;
+      return projectCodexCatalogPage(
         { data: structuredClone(native) },
         { sanitize: sanitizeTerminalText },
-      ),
-    );
+      );
+    });
     const createIndex = () =>
       new CodexCatalogIndex({
         homeId: "restart",
@@ -205,6 +256,10 @@ describe("resident Codex catalog SQLite durability", () => {
       const persisted = (await openState().entries()).map((entry) => entry.value);
       expect(persisted).toHaveLength(3);
       expect(persisted).toContainEqual({ version: 1, kind: "complete" });
+      expect(persisted.filter((entry) => entry.kind === "row")).toEqual([
+        expect.objectContaining({ row: expect.objectContaining({ nativeMetadata: true }) }),
+        expect.objectContaining({ row: expect.objectContaining({ nativeMetadata: true }) }),
+      ]);
       expect(
         persisted.flatMap((entry) => (entry.kind === "row" ? [entry.row.threadId] : [])).toSorted(),
       ).toEqual(["changed", "untouched"]);
@@ -213,7 +268,11 @@ describe("resident Codex catalog SQLite durability", () => {
     }
     await closeOpenClawStateDatabaseAsync();
     native[0]!.preview = "Changed while the Gateway was stopped";
-    const changedFile = await writeCatalogRollout(root, native[0]!);
+    const changedFile = await writeCatalogRollout(root, {
+      ...native[0]!,
+      cwd: "/workspace/stale-rollout-header",
+    });
+    paused = true;
     readNative.mockClear();
     const open = vi.spyOn(fs, "open");
     const readFile = vi.spyOn(fs, "readFile");
@@ -229,6 +288,13 @@ describe("resident Codex catalog SQLite durability", () => {
       expect(open).not.toHaveBeenCalled();
       expect(readFile).not.toHaveBeenCalled();
       await restarted.reconcile();
+      expect(
+        (await restarted.list({})).sessions.find((row) => row.threadId === "changed"),
+      ).toMatchObject({
+        cwd: native[0]!.cwd,
+        fallbackName: "Changed while the Gateway was stopped",
+      });
+      nativeAllowed.resolve();
       await restarted.initialize();
       expect((await restarted.list({})).sessions).toEqual(
         expect.arrayContaining([
@@ -243,6 +309,7 @@ describe("resident Codex catalog SQLite durability", () => {
       expect(readNative).toHaveBeenCalledOnce();
       expect(readFile).not.toHaveBeenCalled();
     } finally {
+      nativeAllowed.resolve();
       await restarted.close();
     }
   });
@@ -376,6 +443,13 @@ describe("resident Codex catalog SQLite durability", () => {
         params: { threadId: "visible", status: { type: "idle" } },
       });
       harness.send({ method: "thread/archived", params: { threadId: "archived" } });
+      harness.send({
+        method: "thread/settings/updated",
+        params: {
+          threadId: "visible",
+          threadSettings: { cwd: "/workspace/live", modelProvider: "live-provider" },
+        },
+      });
       const page = await first.list({});
       expect(page.sessions).toHaveLength(1);
       expect(page.sessions[0]).toMatchObject({
@@ -383,6 +457,8 @@ describe("resident Codex catalog SQLite durability", () => {
         name: null,
         fallbackName: "Original request",
         status: "idle",
+        cwd: "/workspace/live",
+        modelProvider: "live-provider",
       });
       expect(page.sessions[0]?.activeFlags).toBeUndefined();
       expect(harness.writes).toEqual([]);
@@ -399,6 +475,7 @@ describe("resident Codex catalog SQLite durability", () => {
       name: null,
       fallbackName: "Original request",
       status: "notLoaded",
+      cwd: "/workspace/project",
     });
     expect(
       persisted.find((row) => row.threadId === "visible")?.page.sessions[0],
@@ -413,6 +490,7 @@ describe("resident Codex catalog SQLite durability", () => {
         name: null,
         fallbackName: "Original request",
         status: "notLoaded",
+        cwd: "/workspace/project",
       });
       expect(page.sessions[0]).not.toHaveProperty("activeFlags");
       expect(readNative).not.toHaveBeenCalled();

@@ -2,7 +2,11 @@ import { asFiniteNumber } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { sanitizeTerminalText } from "openclaw/plugin-sdk/text-chunking";
 import type { CodexThread, CodexThreadListResponse } from "./app-server/protocol.js";
 import type { CodexCatalogPageDiagnostics } from "./session-catalog-diagnostics.js";
-import type { CodexCatalogIndexRow } from "./session-catalog-index-state.js";
+import { codexCatalogRowRecency } from "./session-catalog-index-order.js";
+import type {
+  CodexCatalogIndexRow,
+  CodexCatalogRolloutFingerprint,
+} from "./session-catalog-index-state.js";
 import {
   readControlCursor,
   selectCodexCatalogPreviewInput,
@@ -26,6 +30,15 @@ type CodexCatalogProjectionParams = {
   source?: CodexCatalogSource;
 };
 
+/** Single-thread responses remain owned by their native consumers. */
+export async function projectCodexCatalogThread(thread: CodexThread, localSessionsRoot?: string) {
+  const { sanitizeTerminalText } = await import("openclaw/plugin-sdk/text-chunking");
+  return projectCodexCatalogPage(
+    { data: [{ ...thread }] },
+    { localSessionsRoot, sanitize: sanitizeTerminalText, source: getCodexCatalogSource(thread) },
+  );
+}
+
 export async function projectCodexCatalogPage(
   response: CodexThreadListResponse,
   params: CodexCatalogProjectionParams,
@@ -38,7 +51,7 @@ export async function projectCodexCatalogPage(
     readControlCursor(response.backwardsCursor, "backwards response");
     // Also bound direct/pinned adapters before the first asynchronous provenance read.
     for (const thread of response.data) {
-      if (typeof thread.preview === "string") {
+      if (typeof thread.preview === "string" && thread.preview) {
         thread.preview = truncateCodexCatalogPreview(
           selectCodexCatalogPreviewInput(thread.preview),
           sanitize,
@@ -61,7 +74,9 @@ export async function projectCodexCatalogPage(
         const rolloutPath = typeof thread.path === "string" ? thread.path.trim() : "";
         page.managedThreads = [{ threadId: thread.id, ...(rolloutPath ? { rolloutPath } : {}) }];
       } else {
-        const session = toCatalogSession(thread, false, sanitize);
+        const session = toCatalogSession(thread, false, sanitize, {
+          value: typeof thread.preview === "string" ? thread.preview : undefined,
+        });
         if (session) {
           page.sessions.push(session);
         }
@@ -71,7 +86,8 @@ export async function projectCodexCatalogPage(
           {
             threadId: thread.id,
             archived: false,
-            ...(thread.preview ? { preview: thread.preview } : {}),
+            nativeMetadata: true,
+            ...(typeof thread.preview === "string" ? { preview: thread.preview } : {}),
             ...(thread.path ? { rolloutPath: thread.path } : {}),
             updatedAt: asFiniteNumber(thread.updatedAt) ?? null,
             recencyAt: asFiniteNumber(thread.recencyAt) ?? null,
@@ -122,11 +138,15 @@ export async function projectCodexCatalogDeltaPage(
       return undefined;
     }
     if (row.page.sessions.length === 0) {
-      return row;
+      return copyCodexCatalogSource(thread, { ...row, nativeMetadata: true });
+    }
+    if (typeof thread.preview === "string" && Boolean(thread.preview) !== Boolean(row.preview)) {
+      return undefined;
     }
     const session = toCatalogSession(thread, false, params.sanitize, { value: row.preview });
     return copyCodexCatalogSource(thread, {
       ...row,
+      nativeMetadata: true,
       page: { sessions: session ? [session] : [] },
     });
   });
@@ -141,4 +161,42 @@ export async function projectCodexCatalogDeltaPage(
       response.data[index]?.ephemeral === true ? [] : [row ?? changed.rows[changedIndex++]!],
     ),
   };
+}
+
+/** Sampled rollout content cannot supersede authoritative native settings. */
+export function mergeCodexCatalogRolloutRow(
+  row: CodexCatalogIndexRow,
+  existing: CodexCatalogIndexRow | undefined,
+  fingerprint: CodexCatalogRolloutFingerprint,
+): CodexCatalogIndexRow {
+  const recencyAt =
+    row.recencyAt === null
+      ? (existing?.recencyAt ?? null)
+      : Math.max(row.recencyAt, existing?.recencyAt ?? row.recencyAt);
+  const metadata = existing?.nativeMetadata ? existing : row;
+  const preview = row.preview ?? metadata.preview;
+  const sessions = metadata.page.sessions.map((session) => {
+    const updated = Object.assign({}, session);
+    delete updated.fallbackName;
+    if (!session.name && preview) {
+      updated.fallbackName = preview;
+    }
+    if (recencyAt !== null) {
+      updated.recencyAt = recencyAt;
+    }
+    return updated;
+  });
+  const merged: CodexCatalogIndexRow = {
+    ...metadata,
+    nativeMetadata: existing?.nativeMetadata ?? false,
+    archived: existing?.archived ?? false,
+    recencyAt,
+    fingerprint,
+    ...(preview !== undefined ? { preview } : {}),
+    page: { ...metadata.page, sessions },
+  };
+  if (existing && codexCatalogRowRecency(merged) > codexCatalogRowRecency(existing)) {
+    delete merged.sourceOrder;
+  }
+  return merged;
 }

@@ -149,7 +149,7 @@ describe("resident Codex catalog recovery", () => {
     }
   });
 
-  it("publishes changed rollout metadata alongside a concurrent native rename", async () => {
+  it("publishes changed provisional rollout metadata alongside a concurrent native rename", async () => {
     const home = tempDirs.make("codex-resident-currency-race-");
     const root = path.join(home, "sessions");
     const original = idleThread({
@@ -170,7 +170,7 @@ describe("resident Codex catalog recovery", () => {
     };
     const homeId = await codexCatalogResidentHomeKey({ startOptions });
     const readNative = vi.fn(async () =>
-      projectCodexCatalogPage({ data: [original] }, { sanitize: sanitizeTerminalText }),
+      projectCodexCatalogPage({ data: [] }, { sanitize: sanitizeTerminalText }),
     );
     const index = new CodexCatalogIndex({
       homeId,
@@ -234,7 +234,7 @@ describe("resident Codex catalog recovery", () => {
     const file = await writeCatalogRollout(root, original);
     original.path = file;
     const readNative = vi.fn(async () =>
-      projectCodexCatalogPage({ data: [original] }, { sanitize: sanitizeTerminalText }),
+      projectCodexCatalogPage({ data: [] }, { sanitize: sanitizeTerminalText }),
     );
     const index = new CodexCatalogIndex({
       homeId: "read-recovery",
@@ -333,7 +333,7 @@ describe("resident Codex catalog recovery", () => {
             ? [
                 {
                   threadId: original.id,
-                  cwd: "/workspace/changed",
+                  cwd: "/workspace/original",
                   recencyAt: startedAt,
                 },
               ]
@@ -343,9 +343,13 @@ describe("resident Codex catalog recovery", () => {
         // This response carries explicit originator metadata, so its projection
         // finishes without filesystem work before the next event-loop turn.
         await nextTurn();
-        expect(await index.list({})).toEqual(current);
+        const refreshedStatus = {
+          ...current,
+          sessions: current.sessions.map((session) => ({ ...session, status: "idle" })),
+        };
+        expect(await index.list({})).toEqual(refreshedStatus);
         await index.reconcile();
-        expect(await index.list({})).toEqual(current);
+        expect(await index.list({})).toEqual(refreshedStatus);
         expect(readNative).toHaveBeenCalledOnce();
       } finally {
         await harness.client.closeAndWait();
@@ -414,7 +418,7 @@ describe("resident Codex catalog recovery", () => {
     const file = await writeCatalogRollout(root, original);
     original.path = file;
     const readNative = vi.fn(async () =>
-      projectCodexCatalogPage({ data: [original] }, { sanitize: sanitizeTerminalText }),
+      projectCodexCatalogPage({ data: [] }, { sanitize: sanitizeTerminalText }),
     );
     const index = new CodexCatalogIndex({
       homeId: "bounded-preview",

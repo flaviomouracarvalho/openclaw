@@ -342,6 +342,7 @@ type CodexThreadUnarchiveResponse = {
 export type CodexThreadResumeResponse = {
   thread: CodexThread;
   model: string;
+  cwd: string;
   modelProvider?: string | null;
   initialTurnsPage?: CodexInitialTurnsPage | null;
 };

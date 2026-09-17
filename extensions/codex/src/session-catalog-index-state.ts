@@ -14,6 +14,7 @@ export type CodexCatalogIndexRow = {
   updatedAt: number | null;
   recencyAt: number | null;
   archived: boolean;
+  nativeMetadata: boolean;
   preview?: string;
   /** Stable tie position, initially assigned in native order. */
   sourceOrder?: number;
@@ -49,6 +50,7 @@ export function readStoredCodexCatalogRow(value: unknown): CodexCatalogIndexRow 
     !row.threadId ||
     row.threadId.length > 256 ||
     typeof row.archived !== "boolean" ||
+    typeof row.nativeMetadata !== "boolean" ||
     (row.preview !== undefined && (typeof row.preview !== "string" || row.preview.length > 500)) ||
     (row.sourceOrder !== undefined &&
       (typeof row.sourceOrder !== "number" || !Number.isSafeInteger(row.sourceOrder))) ||
@@ -85,6 +87,7 @@ export function readStoredCodexCatalogRow(value: unknown): CodexCatalogIndexRow 
       updatedAt: row.updatedAt,
       recencyAt: row.recencyAt,
       archived: row.archived,
+      nativeMetadata: row.nativeMetadata,
       page: codexCatalogMetadataPage(page),
       ...(typeof row.preview === "string" ? { preview: row.preview } : {}),
       ...(typeof row.sourceOrder === "number" ? { sourceOrder: row.sourceOrder } : {}),
@@ -121,6 +124,19 @@ export class CodexCatalogPersistence {
 
   remove(threadId: string): void {
     this.queue(this.key(threadId), undefined);
+  }
+
+  async pruneObsolete(
+    keys: Iterable<string>,
+    currentRows: Iterable<CodexCatalogIndexRow>,
+  ): Promise<void> {
+    const currentKeys = new Set(Array.from(currentRows, (row) => this.key(row.threadId)));
+    for (const key of keys) {
+      if (!currentKeys.has(key)) {
+        this.queue(key, undefined);
+      }
+    }
+    await this.drain();
   }
 
   async finishHydration(): Promise<void> {

@@ -112,6 +112,66 @@ afterEach(async () => {
 
 describe("resident Codex catalog notifications", () => {
   it.each([
+    { repeatFirst: false, expected: ["second", "first"] },
+    { repeatFirst: "queued", expected: ["first", "second"] },
+    { repeatFirst: "inflight", expected: ["first", "second"] },
+  ])(
+    "preserves turn-start ordering across reversed reads (coalesced start: $repeatFirst)",
+    async ({ repeatFirst, expected }) => {
+      const first = thread({ id: "first" });
+      const second = thread({ id: "second" });
+      const { index, harness, readNative } = await fixture([first, second]);
+      let turn = 0;
+      const start = (threadId: string) =>
+        harness.send({
+          method: "turn/started",
+          params: { threadId, turn: { id: `turn-${++turn}`, startedAt: 100, items: [] } },
+        });
+      start(first.id);
+      start(second.id);
+      if (repeatFirst === "queued") {
+        harness.send({ method: "turn/completed", params: { threadId: first.id, turn: {} } });
+        start(first.id);
+      }
+      const firstRead = JSON.parse(await harness.waitForWrite(0));
+      const secondRead = JSON.parse(await harness.waitForWrite(1));
+      expect(firstRead).toMatchObject({ method: "thread/read", params: { threadId: first.id } });
+      expect(secondRead).toMatchObject({ method: "thread/read", params: { threadId: second.id } });
+      if (repeatFirst === "inflight") {
+        harness.send({ method: "turn/completed", params: { threadId: first.id, turn: {} } });
+        start(first.id);
+      }
+      harness.send({
+        id: secondRead.id,
+        result: { thread: { ...second, name: "Second read returned first" } },
+      });
+      await vi.waitFor(() =>
+        expect(index.get(second.id)?.page.sessions[0]?.name).toBe("Second read returned first"),
+      );
+      harness.send({
+        id: firstRead.id,
+        result: { thread: { ...first, name: "First read returned last" } },
+      });
+      await vi.waitFor(() =>
+        expect(index.get(first.id)?.page.sessions[0]?.name).toBe("First read returned last"),
+      );
+      if (repeatFirst === "inflight") {
+        const latestRead = JSON.parse(await harness.waitForWrite(2));
+        harness.send({
+          id: latestRead.id,
+          result: { thread: { ...first, name: "Latest first turn" } },
+        });
+        await vi.waitFor(() =>
+          expect(index.get(first.id)?.page.sessions[0]?.name).toBe("Latest first turn"),
+        );
+      }
+      expect((await index.list({})).sessions.map((row) => row.threadId)).toEqual(expected);
+      expect(harness.writes).toHaveLength(repeatFirst === "inflight" ? 3 : 2);
+      expect(readNative).toHaveBeenCalledOnce();
+    },
+  );
+
+  it.each([
     {
       change: "inserting a newer head",
       initial: ["alpha", "bravo"],

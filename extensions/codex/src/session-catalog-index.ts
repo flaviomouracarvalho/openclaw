@@ -7,6 +7,7 @@ import { subscribeCodexCatalogEvents } from "./session-catalog-events.js";
 import { CodexCatalogIndexEvents } from "./session-catalog-index-events.js";
 import { CodexCatalogField } from "./session-catalog-index-field.js";
 import { applyCodexCatalogName } from "./session-catalog-index-names.js";
+import { CodexCatalogObservations } from "./session-catalog-index-observations.js";
 import {
   compareCodexCatalogRows as order,
   CodexCatalogOrdering,
@@ -23,14 +24,18 @@ import {
 } from "./session-catalog-index-state.js";
 import { CODEX_CATALOG_NATIVE_PAGE_LIMIT } from "./session-catalog-native-projection.js";
 import { readControlCursor } from "./session-catalog-parsing.js";
-import { projectCodexCatalogPage } from "./session-catalog-projection.js";
+import {
+  projectCodexCatalogThread,
+  mergeCodexCatalogRolloutRow,
+} from "./session-catalog-projection.js";
 import {
   scanCodexCatalogRollouts,
   codexCatalogRolloutLogicalPath,
   isCodexCatalogRolloutPathCovered,
   readCodexCatalogRollout,
 } from "./session-catalog-rollouts.js";
-import { getCodexCatalogSource } from "./session-catalog-source.js";
+import { CodexCatalogSettingsIndex } from "./session-catalog-settings.js";
+import { getCodexCatalogSource, setCodexCatalogSource } from "./session-catalog-source.js";
 import { CodexCatalogStatusIndex } from "./session-catalog-status.js";
 import type {
   CodexSessionCatalogPage,
@@ -60,6 +65,7 @@ type IndexOptions = {
 export class CodexCatalogIndex {
   private readonly rows = new Map<string, CodexCatalogIndexRow>();
   private readonly liveStatus = new CodexCatalogStatusIndex();
+  private readonly liveSettings = new CodexCatalogSettingsIndex();
   private readonly names = new CodexCatalogField<string | null>();
   private ordered: CodexCatalogIndexRow[] | undefined;
   private initializing: Promise<void> | undefined;
@@ -78,18 +84,23 @@ export class CodexCatalogIndex {
   private reconcilingNative: Promise<void> | undefined;
   private observedFiles = new Map<string, CodexCatalogRolloutFingerprint>();
   private readonly persistence: CodexCatalogPersistence;
-  private revision = 0;
+  private readonly obsoleteStoredKeys = new Set<string>();
   private sourceRevision = 0;
   private readonly ordering = new CodexCatalogOrdering();
-  private readonly mutations = new Map<string, number>();
-  private readonly observations = new Map<symbol, number>();
+  private readonly observations = new CodexCatalogObservations();
   private readonly events: CodexCatalogIndexEvents;
 
   constructor(private readonly options: IndexOptions) {
     this.persistence = new CodexCatalogPersistence(options.state, (error) => this.report(error));
     this.events = new CodexCatalogIndexEvents({
       get: (id) => this.rows.get(id),
-      updateStatus: (id, status, source) => this.liveStatus.update(id, status, source),
+      updateStatus: (id, status, source) => {
+        this.liveStatus.update(id, status, source);
+        if (status.status === "notLoaded") {
+          this.liveSettings.withdraw(id, source);
+        }
+      },
+      updateSettings: (id, settings, source) => this.liveSettings.update(id, settings, source),
       rename: (id, name) => {
         this.names.update(id, name);
         const row = this.rows.get(id);
@@ -98,7 +109,8 @@ export class CodexCatalogIndex {
         }
       },
       upsert: (thread) => this.upsertThread(thread),
-      refresh: (id, readThread) => this.refreshThread(id, readThread),
+      reserveTurnStartOrder: () => this.ordering.reserveEvent(),
+      refresh: (id, readThread, sourceOrder) => this.refreshThread(id, readThread, sourceOrder),
       archive: (id) => this.archive(id),
       remove: (id) => this.remove(id),
       report: (error) => this.report(error),
@@ -107,7 +119,14 @@ export class CodexCatalogIndex {
       options.homeId,
       (event, readThread, source) => this.events.handle(event, readThread, source),
       {
-        onClose: (source) => this.liveStatus.invalidate(source),
+        onClose: (source) => {
+          this.liveStatus.invalidate(source);
+          this.liveSettings.invalidate(source);
+        },
+        onResume: async (response, source) => {
+          this.liveSettings.update(response.thread.id, response, source);
+          await this.upsertThread(setCodexCatalogSource(response.thread, source));
+        },
         onRemoteReady: () => {
           if (this.closed || options.localSessionsRoot) {
             return;
@@ -120,30 +139,6 @@ export class CodexCatalogIndex {
         },
       },
     );
-  }
-
-  private markMutation(threadId: string): void {
-    this.revision++;
-    if (this.observations.size) {
-      this.mutations.set(threadId, this.revision);
-    }
-  }
-
-  private async observe<T>(read: (isCurrent: (id: string) => boolean) => Promise<T>): Promise<T> {
-    const token = Symbol("catalog observation");
-    const revision = this.revision;
-    this.observations.set(token, revision);
-    try {
-      return await read((id) => (this.mutations.get(id) ?? 0) <= revision);
-    } finally {
-      this.observations.delete(token);
-      const oldest = Math.min(...this.observations.values());
-      for (const [id, changed] of this.mutations) {
-        if (changed <= oldest) {
-          this.mutations.delete(id);
-        }
-      }
-    }
   }
 
   private assertCurrent(): void {
@@ -176,7 +171,7 @@ export class CodexCatalogIndex {
     }
     const previous = this.rows.get(candidate.threadId);
     const preview = candidate.preview ?? previous?.preview;
-    const patched = this.withName({ ...candidate, ...(preview ? { preview } : {}) });
+    const patched = this.withName({ ...candidate, ...(preview !== undefined ? { preview } : {}) });
     const row = {
       ...patched,
       page: codexCatalogMetadataPage(patched.page),
@@ -190,27 +185,25 @@ export class CodexCatalogIndex {
     }
     this.rows.set(row.threadId, row);
     this.ordered = undefined;
-    if (this.rows.size > CODEX_CATALOG_MAX_ROWS) {
-      const oldest = [...this.rows.values()].toSorted(
-        (a, b) => Number(b.archived) - Number(a.archived) || -order(a, b),
-      )[0];
-      if (oldest?.threadId === row.threadId) {
-        this.rows.delete(row.threadId);
-        this.liveStatus.delete(row.threadId);
-        this.names.delete(row.threadId);
-        return;
-      }
-      if (oldest) {
-        this.remove(oldest.threadId);
-      }
+    const oldest = this.ordering.evictionCandidate(this.rows);
+    if (oldest?.threadId === row.threadId) {
+      this.rows.delete(row.threadId);
+      this.liveStatus.delete(row.threadId);
+      this.liveSettings.delete(row.threadId);
+      this.names.delete(row.threadId);
+      return;
+    }
+    if (oldest) {
+      this.remove(oldest.threadId);
     }
     this.persistence.put(row);
   }
 
   private remove(threadId: string): void {
-    this.markMutation(threadId);
+    this.observations.mark(threadId);
     this.rows.delete(threadId);
     this.liveStatus.delete(threadId);
+    this.liveSettings.delete(threadId);
     this.names.delete(threadId);
     this.ordered = undefined;
     this.persistence.remove(threadId);
@@ -227,11 +220,15 @@ export class CodexCatalogIndex {
       const sourceRevision = this.sourceRevision;
       this.initializing = (async () => {
         await this.restore();
+        await this.persistence.pruneObsolete(this.obsoleteStoredKeys, this.rows.values());
+        this.obsoleteStoredKeys.clear();
         await this.reconcilingNative?.catch((error: unknown) => this.report(error));
         if (!this.initialized) {
           let observedRevision: number;
           do {
-            observedRevision = await this.observe((isCurrent) => this.hydrate(isCurrent));
+            observedRevision = await this.observations.observe((isCurrent) =>
+              this.hydrate(isCurrent),
+            );
           } while (observedRevision !== this.sourceRevision);
         }
         if (this.needsNativeRefresh) {
@@ -261,7 +258,7 @@ export class CodexCatalogIndex {
     if (this.restored) {
       return;
     }
-    this.restoring ??= this.observe(async (isCurrent) => {
+    this.restoring ??= this.observations.observe(async (isCurrent) => {
       let complete = false;
       let validSnapshot = true;
       if (this.options.state) {
@@ -271,10 +268,12 @@ export class CodexCatalogIndex {
           for (const entry of entries) {
             if (entry.value?.version === 1 && entry.value.kind === "complete") {
               complete = true;
+              continue;
             }
             const row = readStoredCodexCatalogRow(entry.value);
-            if (entry.value?.kind === "row" && !row) {
+            if (!row) {
               validSnapshot = false;
+              this.obsoleteStoredKeys.add(entry.key);
             }
             if (row && isCurrent(row.threadId)) {
               const restored = row.rolloutPath
@@ -293,6 +292,9 @@ export class CodexCatalogIndex {
         }
       }
       this.restored = true;
+      if (!validSnapshot) {
+        this.obsoleteStoredKeys.add("complete");
+      }
       if (complete && validSnapshot && this.options.localSessionsRoot) {
         this.initialized = true;
         this.needsNativeRefresh = true;
@@ -355,7 +357,7 @@ export class CodexCatalogIndex {
       return this.initializing;
     }
     if (!this.reconcilingNative) {
-      const refresh = this.observe(async (isCurrent) => {
+      const refresh = this.observations.observe(async (isCurrent) => {
         await this.hydrate(isCurrent, true);
       });
       this.reconcilingNative = refresh.finally(() => {
@@ -428,7 +430,7 @@ export class CodexCatalogIndex {
               ? previous.fingerprint
               : undefined))
           : undefined;
-        this.markMutation(row.threadId);
+        this.observations.mark(row.threadId);
         this.put({
           ...row,
           sourceOrder: batchOrder(row, previous, position),
@@ -498,9 +500,11 @@ export class CodexCatalogIndex {
 
   reconcile(): Promise<void> {
     if (!this.reconciling) {
-      this.reconciling = this.observe((isCurrent) => this.reconcileFiles(isCurrent)).finally(() => {
-        this.reconciling = undefined;
-      });
+      this.reconciling = this.observations
+        .observe((isCurrent) => this.reconcileFiles(isCurrent))
+        .finally(() => {
+          this.reconciling = undefined;
+        });
     }
     return this.reconciling;
   }
@@ -561,11 +565,8 @@ export class CodexCatalogIndex {
         observed.set(file, fingerprint);
         continue;
       }
-      const { sanitizeTerminalText } = await import("openclaw/plugin-sdk/text-chunking");
-      const projected = await projectCodexCatalogPage(
-        { data: [thread] },
-        { localSessionsRoot: root, sanitize: sanitizeTerminalText },
-      );
+      thread.preview ||= existing?.preview;
+      const projected = await projectCodexCatalogThread(thread, root);
       this.assertCurrent();
       if (!isCurrent(thread.id)) {
         continue;
@@ -575,22 +576,8 @@ export class CodexCatalogIndex {
       if (!row) {
         continue;
       }
-      const recencyAt =
-        row.recencyAt === null
-          ? (existing?.recencyAt ?? null)
-          : Math.max(row.recencyAt, existing?.recencyAt ?? row.recencyAt);
-      if (existing?.page.sessions[0] && row.page.sessions[0]) {
-        row.page.sessions[0] = {
-          ...existing.page.sessions[0],
-          ...row.page.sessions[0],
-          ...(existing.page.sessions[0].name !== undefined
-            ? { name: existing.page.sessions[0].name }
-            : {}),
-          ...(recencyAt !== null ? { recencyAt } : {}),
-        };
-      }
-      this.markMutation(row.threadId);
-      this.put({ ...row, recencyAt, fingerprint });
+      this.observations.mark(row.threadId);
+      this.put(mergeCodexCatalogRolloutRow(row, existing, fingerprint));
       await nextTurn();
     }
     for (const row of byPath.values()) {
@@ -616,26 +603,30 @@ export class CodexCatalogIndex {
       // Retiring a view must not turn an acknowledged native mutation into failure.
       return;
     }
-    this.markMutation(thread.id);
+    this.observations.mark(thread.id);
     const fieldRevision = this.captureFields();
-    await this.observe(async (isCurrent) => this.projectThread(thread, isCurrent, fieldRevision));
+    await this.observations.observe(async (isCurrent) =>
+      this.projectThread(thread, isCurrent, fieldRevision),
+    );
   }
 
   private async refreshThread(
     id: string,
     readThread: (id: string) => Promise<CodexThread>,
-  ): Promise<void> {
+    sourceOrder: number | undefined,
+  ): Promise<boolean> {
     this.assertCurrent();
-    this.markMutation(id);
+    this.observations.mark(id);
     const fieldRevision = this.captureFields();
-    await this.observe(async (isCurrent) => {
+    return await this.observations.observe(async (isCurrent) => {
       const thread = await readThread(id);
       if (thread.id !== id) {
         throw new Error("Codex catalog refresh returned a different thread");
       }
-      if (!this.closed) {
-        await this.projectThread(thread, isCurrent, fieldRevision);
+      if (this.closed) {
+        return true;
       }
+      return this.projectThread(thread, isCurrent, fieldRevision, sourceOrder);
     });
   }
 
@@ -643,29 +634,23 @@ export class CodexCatalogIndex {
     thread: CodexThread,
     isCurrent: (id: string) => boolean,
     fieldRevision: FieldRevision,
-  ): Promise<void> {
-    // Notifications and mutation results still belong to their native consumers.
-    const { sanitizeTerminalText } = await import("openclaw/plugin-sdk/text-chunking");
-    const projected = await projectCodexCatalogPage(
-      { data: [{ ...thread }] },
-      {
-        localSessionsRoot: this.options.localSessionsRoot,
-        sanitize: sanitizeTerminalText,
-        source: getCodexCatalogSource(thread),
-      },
-    );
+    sourceOrder?: number,
+  ): Promise<boolean> {
+    const projected = await projectCodexCatalogThread(thread, this.options.localSessionsRoot);
     if (this.closed) {
-      return;
-    }
-    if (projected.excludedThreadIds?.includes(thread.id) && isCurrent(thread.id)) {
-      this.remove(thread.id);
+      return true;
     }
     const row = projected.rows[0];
     if (row) {
       this.observeFields(row, fieldRevision);
-      if (!isCurrent(thread.id)) {
-        return;
-      }
+    }
+    if (!isCurrent(thread.id)) {
+      return false;
+    }
+    if (projected.excludedThreadIds?.includes(thread.id)) {
+      this.remove(thread.id);
+    }
+    if (row) {
       const previous = this.rows.get(thread.id);
       const fingerprint =
         previous?.rolloutPath &&
@@ -674,9 +659,15 @@ export class CodexCatalogIndex {
           codexCatalogRolloutLogicalPath(row.rolloutPath)
           ? previous.fingerprint
           : undefined;
-      this.markMutation(thread.id);
-      this.put({ ...row, ...(fingerprint ? { fingerprint } : {}) });
+      this.observations.mark(thread.id);
+      this.put({
+        ...row,
+        // Preserve notification order when tied turns' metadata reads finish out of order.
+        ...(sourceOrder !== undefined ? { sourceOrder } : {}),
+        ...(fingerprint ? { fingerprint } : {}),
+      });
     }
+    return true;
   }
 
   archive(threadId: string): void {
@@ -685,8 +676,9 @@ export class CodexCatalogIndex {
     if (this.closed) {
       return;
     }
-    this.markMutation(threadId);
+    this.observations.mark(threadId);
     this.liveStatus.delete(threadId);
+    this.liveSettings.delete(threadId);
     this.names.delete(threadId);
     const row = this.rows.get(threadId);
     if (row) {
@@ -707,13 +699,14 @@ export class CodexCatalogIndex {
       throw this.failure.error;
     }
     this.ordered ??= [...this.rows.values()].toSorted(order);
-    return query(this.ordered, this.liveStatus);
+    return query(this.ordered, this.liveStatus, this.liveSettings);
   }
 
   /** Fence future publications before a replacement opens the same persisted home. */
   retire(): Promise<void> {
     this.closed = true;
     this.liveStatus.invalidate();
+    this.liveSettings.invalidate();
     this.unsubscribe();
     clearInterval(this.timer);
     clearImmediate(this.background);

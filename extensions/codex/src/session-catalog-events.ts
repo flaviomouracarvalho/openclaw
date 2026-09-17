@@ -7,7 +7,11 @@ import type { CodexAppServerClient, CodexAppServerRuntimeIdentity } from "./app-
 import type { CodexAppServerStartOptions } from "./app-server/config-contracts.js";
 import { inferCodexAppServerConnectionClass } from "./app-server/config-security.js";
 import { buildCodexAppServerConnectionFingerprint } from "./app-server/plugin-app-cache-key.js";
-import type { CodexServerNotification, CodexThread } from "./app-server/protocol.js";
+import type {
+  CodexServerNotification,
+  CodexThread,
+  CodexThreadResumeResponse,
+} from "./app-server/protocol.js";
 import { defineCodexBuildState } from "./build-state.js";
 import { codexCatalogHomeIdFromCanonicalPath } from "./session-catalog-home-id.js";
 import { codexCatalogSourceForClient, type CodexCatalogSource } from "./session-catalog-source.js";
@@ -23,15 +27,18 @@ type CodexCatalogSubscription = {
 type CodexCatalogLifecycleCallbacks = {
   onRemoteReady?: (source: CodexCatalogSource) => void;
   onClose?: (source: CodexCatalogSource) => void;
+  onResume?: (response: CodexThreadResumeResponse, source: CodexCatalogSource) => Promise<void>;
 };
+type CodexCatalogClientBinding = { homeKey: string; source: CodexCatalogSource };
 
 const getCatalogEvents = defineCodexBuildState("openclaw.codexCatalogEvents", () => ({
   listeners: new Map<string, Set<CodexCatalogSubscription>>(),
-  clients: new WeakMap<CodexAppServerClient, Promise<void>>(),
+  clients: new WeakMap<CodexAppServerClient, Promise<CodexCatalogClientBinding | undefined>>(),
 }));
 
 const CATALOG_NOTIFICATION_METHODS = new Set([
   "thread/started",
+  "turn/started",
   "turn/completed",
   "thread/archived",
   "thread/deleted",
@@ -39,6 +46,7 @@ const CATALOG_NOTIFICATION_METHODS = new Set([
   "thread/reverted",
   "thread/name/updated",
   "thread/status/changed",
+  "thread/settings/updated",
 ]);
 
 /** Uses prepared local identity or resolves it once during client/index startup. */
@@ -94,7 +102,7 @@ export function observeCodexCatalogClient(
   const state = getCatalogEvents();
   const existing = state.clients.get(client);
   if (existing) {
-    return existing;
+    return existing.then(() => undefined);
   }
   const observing = (async () => {
     const homeKey = await codexCatalogResidentHomeKey({
@@ -102,10 +110,10 @@ export function observeCodexCatalogClient(
       runtimeIdentity: client.getRuntimeIdentity(),
     });
     if (client.getCloseError()) {
-      return;
+      return undefined;
     }
     const source = codexCatalogSourceForClient(client);
-    const notifyLifecycle = (callback: keyof CodexCatalogLifecycleCallbacks) => {
+    const notifyLifecycle = (callback: "onRemoteReady" | "onClose") => {
       for (const listener of state.listeners.get(homeKey) ?? []) {
         try {
           listener[callback]?.(source);
@@ -139,7 +147,34 @@ export function observeCodexCatalogClient(
     if (inferCodexAppServerConnectionClass(params.startOptions) === "remote") {
       notifyLifecycle("onRemoteReady");
     }
+    return { homeKey, source };
   })();
   state.clients.set(client, observing);
-  return observing;
+  return observing.then(() => undefined);
+}
+
+/** Acknowledged resume settings may differ from the response thread's persisted metadata. */
+export async function publishCodexCatalogResume(
+  client: CodexAppServerClient,
+  response: CodexThreadResumeResponse,
+): Promise<void> {
+  try {
+    const state = getCatalogEvents();
+    const binding = await state.clients.get(client);
+    if (!binding || binding.source.closed) {
+      return;
+    }
+    await Promise.all(
+      Array.from(state.listeners.get(binding.homeKey) ?? [], async (listener) => {
+        try {
+          await listener.onResume?.(response, binding.source);
+        } catch (error) {
+          embeddedAgentLog.warn("Codex catalog resume observer failed", { error });
+        }
+      }),
+    );
+  } catch (error) {
+    // Catalog publication never changes the outcome of a successful native resume.
+    embeddedAgentLog.warn("Codex catalog resume publication failed", { error });
+  }
 }

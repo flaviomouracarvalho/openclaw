@@ -7,6 +7,7 @@ import {
   normalizeLimit,
   readControlCursor,
 } from "./session-catalog-parsing.js";
+import type { CodexCatalogSettingsIndex } from "./session-catalog-settings.js";
 import type {
   CodexSessionCatalogPage,
   CodexSessionCatalogPageParams,
@@ -59,13 +60,14 @@ export function prepareCodexCatalogQuery(homeId: string, params: CodexSessionCat
   return (
     ordered: readonly CodexCatalogIndexRow[],
     liveStatus: Pick<CodexCatalogField<CodexCatalogStatus>, "get">,
+    liveSettings: Pick<CodexCatalogSettingsIndex, "get">,
   ): CodexSessionCatalogPage => {
     const selected = ordered.filter((row) => {
       const session = row.page.sessions[0];
       return (
         !row.archived &&
         session &&
-        (!cwd || session.cwd === cwd) &&
+        (!cwd || (liveSettings.get(row.threadId)?.cwd ?? session.cwd) === cwd) &&
         (!search || (session.name ?? session.fallbackName)?.toLocaleLowerCase().includes(search))
       );
     });
@@ -98,6 +100,7 @@ export function prepareCodexCatalogQuery(homeId: string, params: CodexSessionCat
             const live = liveStatus.get(row.threadId);
             return {
               ...session,
+              ...liveSettings.get(row.threadId),
               status: live?.status ?? "notLoaded",
               ...(live?.activeFlags ? { activeFlags: [...live.activeFlags] } : {}),
             };
