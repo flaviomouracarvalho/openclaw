@@ -350,10 +350,10 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
         decisions.recordTurnCapabilityInactive();
         throw new Error("message action turn capability is no longer active");
       }
-      const assertActionCurrent = () => {
+      const assertActionCurrent = (includeScheduled = true) => {
         assertCaller();
         turnAuthority.assertCurrent();
-        (scheduledRead ?? scheduledWrite)?.assertCurrent();
+        (includeScheduled ? messageActionAuthorization.scheduled : undefined)?.assertCurrent();
         assertDashboardReadCurrent?.();
       };
       assertActionCurrent();
@@ -408,7 +408,7 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
       const gatewayContext = { ...options, messageActionTurnCapability: gatewayTurnCapability };
       const gateway = createMessageToolGateway(params, gatewayContext, signal, {
         resolveConfig: () => cfg,
-        preserveWriteOutcome: Boolean(scheduledWrite),
+        preserveWriteOutcome: Boolean(messageActionAuthorization.scheduled && !scheduledRead),
       });
       decisions.runBoundary(() =>
         validateExplicitMessageAccountSelection({
@@ -699,7 +699,7 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
           // A completed provider write must settle even if its caller was revoked
           // while awaiting the accepted response. Its next request stays fenced.
           if (!scheduledWrite) {
-            assertActionCurrent();
+            assertActionCurrent(false);
           }
           const messageDelivery = projectEmbeddedMessageDeliveryFact(result, currentSourceReply);
           groupThread.record(result, sourceReply, currentSourceReply, requestedSourceReplyFinal);
