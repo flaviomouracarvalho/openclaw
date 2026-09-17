@@ -17,7 +17,7 @@ import {
 } from "../../daemon/service-inspection-error.js";
 import {
   inspectGatewayServiceInstallationDrift,
-  isSourceCheckoutRoot,
+  isGatewayServiceSourceCheckoutRoot,
   summarizeGatewayServiceLayout,
 } from "../../daemon/service-layout.js";
 import {
@@ -234,7 +234,7 @@ export async function inspectManagedGatewayServiceBeforeUpdate(params: {
       (state.definitionMutationCapability?.kind ?? "writable") === "writable" &&
       !hasGatewayServiceLauncherOverride(command) &&
       resolveManagedGatewayServiceProcessEnv(command, state.env) !== null &&
-      !(await isSourceCheckoutRoot(root))
+      !(await isGatewayServiceSourceCheckoutRoot(root))
     ) {
       const layout = await summarizeGatewayServiceLayout(command);
       if (layout?.packageRootReal && !layout.entrypointSourceCheckout) {
