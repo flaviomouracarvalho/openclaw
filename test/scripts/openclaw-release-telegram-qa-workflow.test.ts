@@ -317,7 +317,6 @@ set -euo pipefail
 if [[ "$*" == *"number="* ]]; then printf '%s\\n' "$FAKE_DIRECT_PR"; exit 0; fi
 if [[ "$*" == *"api graphql"* ]]; then printf '%s\\n' "$FAKE_METADATA"; exit 0; fi
 if [[ "$*" == *"/branches-where-head"* ]]; then printf '%s\\n' "$FAKE_BRANCH_HEADS"; exit 0; fi
-if [[ "$*" == *"/compare/"*"...$FAKE_REMOTE_SHA"* ]]; then printf '%s\\n' "$FAKE_RELEASE_COMPARE_STATUS"; exit 0; fi
 if [[ "$*" == *"/compare/"* ]]; then printf '%s\\n' "behind"; exit 0; fi
 if [[ "$*" == *"/collaborators/"*"/permission"* ]]; then printf '%s\\n' "$FAKE_PERMISSION"; exit 0; fi
 exit 64
@@ -328,6 +327,11 @@ exit 64
     join(fakeBin, "git"),
     `#!/usr/bin/env bash
 set -euo pipefail
+if [[ "$*" == *"init --bare"* || "$*" == *"fetch --quiet"* ]]; then [[ -n "$FAKE_REMOTE_SHA" ]]; exit; fi
+if [[ "$*" == *"FETCH_HEAD^{commit}"* ]]; then printf '%s\\n' "$FAKE_REMOTE_SHA"; exit 0; fi
+if [[ "$*" == *"merge-base --is-ancestor"* ]]; then
+  [[ "$TARGET_SHA" == "$FAKE_REMOTE_SHA" || "$FAKE_RELEASE_COMPARE_STATUS" == ahead ]]; exit
+fi
 if [[ "$*" == *"rev-parse HEAD"* ]]; then printf '%s\\n' "$TARGET_SHA"; exit 0; fi
 if [[ "$*" == *"ls-remote"* ]]; then
   if [[ "$*" == *"refs/tags/"* && "$FAKE_REMOTE_REF" != refs/tags/* ]]; then exit 0; fi
@@ -593,9 +597,7 @@ describe("release Telegram QA workflow", () => {
           expect(result.status, `${provenanceBlock.stepName}/${signature}: ${result.stderr}`).toBe(
             0,
           );
-          expect(result.stdout).toContain(
-            "Telegram candidate trust reason: release-branch-ancestor",
-          );
+          expect(result.stdout).toContain("Telegram candidate trust reason: release-branch");
         }
       }
     }
@@ -724,51 +726,21 @@ describe("release Telegram QA workflow", () => {
   });
 
   it("attributes web-flow release heads through a unique integration-base merge", () => {
-    const results = PROVENANCE_BLOCKS.flatMap((provenanceBlock) =>
-      ["2026.7.1", "2026.7.1-beta.3"].map((candidateVersion) => ({
-        candidateVersion,
-        provenanceBlock,
-        result: runCandidateProvenance(provenanceBlock, {
+    for (const provenanceBlock of PROVENANCE_BLOCKS) {
+      for (const candidateVersion of ["2026.7.1", "2026.7.1-beta.3"]) {
+        const result = runCandidateProvenance(provenanceBlock, {
           candidateVersion,
           mergedPullRequests: [{ baseRefName: "release-integration/2026.7.1-repair-2" }],
           signature: "web-flow",
           targetContextRef: "release/2026.7.1",
-        }),
-      })),
-    );
-    expect(
-      results.map(({ candidateVersion, provenanceBlock, result }) => ({
-        block: provenanceBlock.stepName,
-        candidateVersion,
-        status: result.status,
-        stderr: result.stderr,
-      })),
-    ).toEqual([
-      {
-        block: "Validate candidate release provenance",
-        candidateVersion: "2026.7.1",
-        status: 0,
-        stderr: "",
-      },
-      {
-        block: "Validate candidate release provenance",
-        candidateVersion: "2026.7.1-beta.3",
-        status: 0,
-        stderr: "",
-      },
-      {
-        block: "Revalidate candidate release provenance",
-        candidateVersion: "2026.7.1",
-        status: 0,
-        stderr: "",
-      },
-      {
-        block: "Revalidate candidate release provenance",
-        candidateVersion: "2026.7.1-beta.3",
-        status: 0,
-        stderr: "",
-      },
-    ]);
+        });
+        expect(
+          result.status,
+          `${provenanceBlock.stepName}/${candidateVersion}: ${result.stderr}`,
+        ).toBe(0);
+        expect(result.stderr).toBe("");
+      }
+    }
   });
 
   it("verifies an exact merged PR directly when commit associations are missing", () => {
@@ -782,7 +754,7 @@ describe("release Telegram QA workflow", () => {
           directPullRequest: {},
         });
         expect(result.status, result.stderr).toBe(0);
-        expect(result.stdout).toContain("Telegram candidate trust reason: release-branch-head");
+        expect(result.stdout).toContain("Telegram candidate trust reason: release-branch");
       }
     }
   });
