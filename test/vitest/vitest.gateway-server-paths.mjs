@@ -11,6 +11,7 @@ export const gatewayDatabaseWorkerTestFiles = [
   "src/gateway/local-request-context.session-tools.test.ts",
   "src/gateway/local-request-context.test.ts",
   "src/gateway/managed-image-attachments.test.ts",
+  "src/gateway/server-methods/agent.create-event.test.ts",
   "src/gateway/server-methods/chat-send-synthetic-repair.integration.test.ts",
   "src/gateway/server-methods/cron.list-scoped.test.ts",
   "src/gateway/server-methods/cron.runs.test.ts",
