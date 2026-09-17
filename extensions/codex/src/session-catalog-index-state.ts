@@ -3,12 +3,12 @@ import { setImmediate as nextTurn } from "node:timers/promises";
 import type { PluginStateKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { parseCatalogPage } from "./session-catalog-parsing.js";
-import type { CodexCatalogRolloutFingerprint } from "./session-catalog-rollouts.js";
 import type { CodexSessionCatalogPage } from "./session-catalog-types.js";
 
 // Match the existing Codex managed-thread retention ceiling; previews remain 500 characters.
 export const CODEX_CATALOG_MAX_ROWS = 20_000;
 export const CODEX_CATALOG_STATE_NAMESPACE = "session-catalog-resident";
+export type CodexCatalogRolloutFingerprint = { mtimeMs: number; size: number };
 export type CodexCatalogIndexRow = {
   threadId: string;
   updatedAt: number | null;

@@ -6,7 +6,10 @@ import { root as openSafeRoot } from "openclaw/plugin-sdk/file-access-runtime";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { sanitizeTerminalText } from "openclaw/plugin-sdk/text-chunking";
 import type { CodexSessionSource, CodexThread } from "./app-server/protocol.js";
-import { CODEX_CATALOG_MAX_ROWS } from "./session-catalog-index-state.js";
+import {
+  CODEX_CATALOG_MAX_ROWS,
+  type CodexCatalogRolloutFingerprint,
+} from "./session-catalog-index-state.js";
 import {
   boundedCatalogString,
   selectCodexCatalogPreviewInput,
@@ -26,7 +29,6 @@ const ROLLOUT_SOURCE_DENIAL_CODES = new Set([
   "path-alias",
 ]);
 
-export type CodexCatalogRolloutFingerprint = { mtimeMs: number; size: number };
 export type CodexCatalogRolloutScan = {
   files: Map<string, CodexCatalogRolloutFingerprint>;
   present: Set<string>;

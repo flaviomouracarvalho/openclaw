@@ -23,6 +23,7 @@ import {
   readStoredCodexCatalogRow,
   type CodexCatalogState,
   type CodexCatalogIndexRow,
+  type CodexCatalogRolloutFingerprint,
   CodexCatalogPersistence,
 } from "./session-catalog-index-state.js";
 import { readControlCursor } from "./session-catalog-parsing.js";
@@ -32,7 +33,6 @@ import {
   codexCatalogRolloutLogicalPath,
   isCodexCatalogRolloutPathCovered,
   readCodexCatalogRollout,
-  type CodexCatalogRolloutFingerprint,
 } from "./session-catalog-rollouts.js";
 import type {
   CodexSessionCatalogPage,
