@@ -109,49 +109,33 @@ describe("session catalog Gateway methods", () => {
     ]);
   });
 
-  it("shares settled identical lists across out-of-phase clients until the window expires", async () => {
-    let now = 1_000;
-    const nowSpy = vi.spyOn(Date, "now").mockImplementation(() => now);
-    const list = vi.fn(async () => []);
+  it("serves changed resident provider rows on the next identical list", async () => {
+    const session = {
+      threadId: "external-thread",
+      status: "stored",
+      archived: false,
+      canContinue: false,
+      canArchive: false,
+    };
+    let sessions: (typeof session)[] = [];
+    const list = vi.fn(async () => [
+      {
+        hostId: "gateway:local",
+        label: "Local",
+        kind: "gateway" as const,
+        connected: true,
+        sessions,
+      },
+    ]);
     hoisted.activeRegistry.sessionCatalogs = [{ provider: provider("codex", { list }) }];
     const config = {};
-    try {
-      await call("sessions.catalog.list", {}, config);
+    const client = { connId: "resident-requester" };
+    const before = await call("sessions.catalog.list", {}, config, client);
+    expect(before.mock.calls[0]?.[1]?.catalogs[0]?.hosts[0]?.sessions).toEqual([]);
 
-      now += 2_500;
-      await call("sessions.catalog.list", {}, config);
-      expect(list).toHaveBeenCalledOnce();
-
-      now += 501;
-      await call("sessions.catalog.list", {}, config);
-      expect(list).toHaveBeenCalledTimes(2);
-    } finally {
-      nowSpy.mockRestore();
-    }
-  });
-
-  it("retains 128 completed lists and evicts the least recently reused result", async () => {
-    const now = vi.spyOn(Date, "now").mockReturnValue(1_000);
-    const list = vi.fn(async () => []);
-    hoisted.activeRegistry.sessionCatalogs = [{ provider: provider("fixture", { list }) }];
-    const config = {};
-    const client = { connId: "requester" };
-    const query = (index: number) =>
-      call("sessions.catalog.list", { search: `query-${index}` }, config, client);
-    try {
-      for (let index = 0; index < 128; index += 1) {
-        await query(index);
-      }
-      await query(0);
-      expect(list).toHaveBeenCalledTimes(128);
-      await query(128);
-      await query(0);
-      expect(list).toHaveBeenCalledTimes(129);
-      await query(1);
-      expect(list).toHaveBeenCalledTimes(130);
-    } finally {
-      now.mockRestore();
-    }
+    sessions = [session];
+    const after = await call("sessions.catalog.list", {}, config, client);
+    expect(after.mock.calls[0]?.[1]?.catalogs[0]?.hosts[0]?.sessions).toEqual([session]);
   });
 
   it("projects authoritative creator ownership onto streamed and final catalog rows", async () => {
@@ -253,7 +237,7 @@ describe("session catalog Gateway methods", () => {
     });
   });
 
-  it("does not clone the shared list projection for a settled shared catalog result", async () => {
+  it("does not clone the shared list projection across catalog requests", async () => {
     const storedEntries = [
       {
         sessionKey: "agent:main:shared",
@@ -280,7 +264,7 @@ describe("session catalog Gateway methods", () => {
       await call("sessions.catalog.list", {}, config);
 
       expect(cloneSpy).not.toHaveBeenCalled();
-      expect(hoisted.listSessionEntriesReadOnly).toHaveBeenCalledOnce();
+      expect(hoisted.listSessionEntriesReadOnly).toHaveBeenCalledTimes(2);
       expect(hoisted.listSessionEntriesReadOnly).toHaveBeenLastCalledWith({
         agentId: "main",
         clone: false,

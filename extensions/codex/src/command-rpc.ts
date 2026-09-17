@@ -20,7 +20,7 @@ import {
   describeControlFailure,
   type CodexControlMethod,
 } from "./app-server/capabilities.js";
-import type { CodexAppServerClient, CodexCatalogListRequestKey } from "./app-server/client.js";
+import type { CodexAppServerClient } from "./app-server/client.js";
 import {
   resolveCodexAppServerRuntimeOptions,
   resolveCodexSupervisionAppServerRuntimeOptions,
@@ -61,7 +61,7 @@ export type CodexControlRequestOptions = {
   startOptions?: CodexAppServerStartOptions;
   timeoutMs?: number;
   assertCurrent?: () => void;
-  catalogListKey?: CodexCatalogListRequestKey;
+  catalogPreview?: true;
   controlObservation?: CodexControlRequestObservation;
   beforeRequest?: (
     request: CodexAppServerScopedRequest,
@@ -250,7 +250,9 @@ export async function codexControlRequest(
     sessionId: options.sessionId,
     agentDir: options.agentDir,
     isolated: options.isolated,
-    ...(options.catalogListKey ? { catalogListKey: options.catalogListKey } : {}),
+    ...(options.catalogPreview && method === "thread/list"
+      ? { catalogPreview: true as const }
+      : {}),
     ...(options.controlObservation ? { controlObservation: options.controlObservation } : {}),
     ...auth.clientOptions,
   };

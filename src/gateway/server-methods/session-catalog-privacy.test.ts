@@ -436,7 +436,7 @@ describe("catalog delivery uses current canonical privacy", () => {
     });
   });
 
-  it("rechecks published visibility on cached delivery after a role cap changes", async () => {
+  it("rechecks published visibility on each delivery after a role cap changes", async () => {
     await withCatalog(async ({ call, config, provider, host, list }) => {
       provider.audience = "session-viewers";
       list.mockResolvedValue([
@@ -460,10 +460,10 @@ describe("catalog delivery uses current canonical privacy", () => {
       expect(rows(await call())).toEqual([]);
       role.sessions!.others = "view";
       expect(rows(await call())).toEqual(["published-native"]);
-      expect(list).toHaveBeenCalledTimes(2);
+      expect(list).toHaveBeenCalledTimes(3);
       delete config.gateway!.roles;
       expect(rows(await call())).toEqual(["published-native"]);
-      expect(list).toHaveBeenCalledTimes(3);
+      expect(list).toHaveBeenCalledTimes(4);
     });
   });
 
@@ -577,70 +577,41 @@ describe("catalog delivery uses current canonical privacy", () => {
       });
       expect.soft(list).toHaveBeenCalledTimes(4);
       await call();
-      expect.soft(list).toHaveBeenCalledTimes(4);
+      expect.soft(list).toHaveBeenCalledTimes(5);
       owner.connect.scopes = ["operator.read"];
       await call();
-      expect(list).toHaveBeenCalledTimes(5);
+      expect(list).toHaveBeenCalledTimes(6);
     });
   });
 
   it.each([{ visibility: "draft" as const }, { incognito: true as const }])(
-    "rechecks settled provider results after privacy changes to %j",
+    "rechecks provider results after privacy changes to %j",
     async (patch) =>
       withCatalog(async ({ call, changeForeign, list, callerId }) => {
         expect(rows(await call())).toEqual(["foreign", "owned"]);
         await changeForeign(patch);
         expect.soft(rows(await call())).toEqual(["owned"]);
-        expect(list).toHaveBeenCalledOnce();
-        expect(rows(await call("sessions.catalog.list", { search: "cold" }))).toEqual(["owned"]);
         expect(list).toHaveBeenCalledTimes(2);
+        expect(rows(await call("sessions.catalog.list", { search: "cold" }))).toEqual(["owned"]);
+        expect(list).toHaveBeenCalledTimes(3);
         linkEmail("catalog-other@example.test", callerId);
         expect(rows(await call())).toEqual(
           "visibility" in patch ? ["foreign", "owned"] : ["owned"],
         );
-        expect(list).toHaveBeenCalledTimes(3);
+        expect(list).toHaveBeenCalledTimes(4);
       }),
   );
 
-  it("does not transfer a cached native thread to a replacement session at the same key", async () => {
-    await withCatalog(async ({ call, changeForeign, replaceForeign, list }) => {
+  it("does not transfer a native thread to a replacement session at the same key", async () => {
+    await withCatalog(async ({ call, changeForeign, replaceForeign }) => {
       await changeForeign({ visibility: "draft" });
-      const now = Date.now();
-      const clock = vi.spyOn(Date, "now");
-      try {
-        // Cache observations use logical time; real deletion/recreation keeps native timers.
-        await clock.withImplementation(
-          () => now,
-          async () => {
-            expect(rows(await call())).toEqual(["owned"]);
-          },
-        );
-        await replaceForeign();
-        await clock.withImplementation(
-          () => now + 1,
-          async () => {
-            expect.soft(rows(await call())).toEqual(["owned"]);
-            expect(list).toHaveBeenCalledOnce();
-            expect(
-              rows(await call("sessions.catalog.list", { search: "cold-replacement" })),
-            ).toEqual(["owned"]);
-            expect(list).toHaveBeenCalledTimes(2);
-          },
-        );
-        await clock.withImplementation(
-          () => now + 3_001,
-          async () => {
-            expect(rows(await call())).toEqual(["owned"]);
-            expect(list).toHaveBeenCalledTimes(3);
-          },
-        );
-      } finally {
-        clock.mockRestore();
-      }
+      expect(rows(await call())).toEqual(["owned"]);
+      await replaceForeign();
+      expect(rows(await call())).toEqual(["owned"]);
     });
   });
 
-  it("rechecks recorded plugin ownership without discarding same-instance cache work", async () => {
+  it("rechecks recorded plugin ownership on each list", async () => {
     await withCatalog(async ({ call, list }) => {
       expect(rows(await call())).toEqual(["foreign", "owned"]);
       const scope = { agentId: "main", sessionKey: "agent:main:owned" };
@@ -648,7 +619,7 @@ describe("catalog delivery uses current canonical privacy", () => {
       expect(rows(await call())).toEqual(["foreign"]);
       await upsertSessionEntryCore(scope, { pluginOwnerId: "fixture" });
       expect(rows(await call())).toEqual(["foreign", "owned"]);
-      expect(list).toHaveBeenCalledOnce();
+      expect(list).toHaveBeenCalledTimes(3);
     });
   });
 

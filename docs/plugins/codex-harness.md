@@ -14,26 +14,72 @@ native compaction, and app-server execution. OpenClaw still owns chat
 channels, session files, model selection, OpenClaw dynamic tools, approvals,
 media delivery, and the visible transcript mirror.
 
-The native session catalog requests at most 64 threads per page and shortens
-previews to 500 characters before delivering them to catalog consumers. An unfiltered
-first list fetches one native page; older pages load on demand. Title search and
-hiding OpenClaw-managed sessions share a 20-page catalog scan budget for each returned
-page. Continuing from its cursor searches the next pages without skipping older matches.
-A single native preview
-can still make its response large because the native API has no preview byte limit.
-Pages use native recency order with tie-safe cursors.
+The native session catalog keeps one resident index per Codex home, shared across
+agents, working-directory filters, searches, and pages. Lists filter and page
+bounded display rows in memory. They do not expire or restart native discovery
+on the normal sidebar polling interval. Previews remain limited to 500 characters;
+native hydration and catalog pages remain limited to 64 rows each. Native preview
+fields can still be large during hydration; only their bounded display copies
+remain resident. Recency, native position within exposed timestamp ties, and thread ID form the
+stable ordering and opaque continuation key. Initial native positions preserve
+the sub-second order that the protocol rounds to seconds. Unchanged rows keep
+their positions across background refreshes, so existing cursors do not repeat
+or skip them. Newly discovered or newly active rows receive fresh positions ahead
+of an existing timestamp tie, preserving native order within each discovery batch.
 
-Polls reuse the existing 32-second page cache. The plugin remembers bounded display
-rows and an update watermark in memory. An unchanged newest thread can satisfy a
-refresh with a one-row probe; tied timestamps require a page and an overlap read.
-Every tenth refresh rechecks the bounded head page for title, status, or archive
-changes that do not advance the newest timestamp. Refreshes update only the walked
-prefix, and native cursors keep older sessions available after cache eviction.
-Nothing is persisted, and restarting the Gateway starts with an empty cache.
-Within each source's 32 cached pages, up to 20 recent-page entries are favored over
-older discovery pages across all queries. Scanning older sessions therefore does
-not discard the entire recent listing before the next poll. Expiry and native
-pagination remain unchanged.
+Explicit homes hydrate in the background when the plugin activates. An implicit
+process home waits for an authorized catalog request. A home without a saved
+snapshot walks native `thread/list` pages once, yielding between pages. Its first
+cold list returns its available snapshot immediately, initially empty, while
+initialization continues in the background. Subsequent sidebar refreshes see the
+new rows; no list waits for native discovery.
+The index persists reconstructible display rows and file fingerprints through
+plugin state in the OpenClaw SQLite database. A restart loads this snapshot before
+serving the first list, then reconciles changed files in the background. A
+database-only native name walk recovers renames made while the Gateway was
+stopped and repeats every 30 seconds to discover renames from other Codex
+processes: name changes update neither rollout files nor activity timestamps.
+These coalesced background walks do not parse previews or repair rollouts, and
+catalog requests never wait for them.
+Loaded/active status has a separate memory-only lifecycle and resets to **Stored / activity unknown**
+after restart or an observed app-server connection closes, until fresh native
+events or metadata supply current status. Late responses from the closed
+connection cannot restore its active status. No native rollouts or
+transcripts are copied into the state database.
+For remote app-servers without local filesystem access, the saved snapshot is
+available immediately and a background native walk reconciles changes made while
+the Gateway was stopped or its app-server connection was unavailable. Every
+30 seconds, a database-only walk reconciles remote membership and metadata.
+Unchanged display rows reuse their bounded previews; only new or changed rows
+need preview projection. Unchanged rows are not rewritten to SQLite.
+
+Native lifecycle notifications update affected threads, and successful catalog
+archives immediately hide their rows. A debounced recursive directory watcher
+and a 30-second stat-only scan discover external rollout changes. Only changed or
+new files are read: at most 128 KiB each from the head and tail of a plain rollout,
+or a bounded 128 KiB compressed head. A missing first-user preview stays missing
+until a later change makes it discoverable. Native titles are preserved when a
+rollout has no title. A bounded read that cannot reach the first user message
+preserves its previously known preview. Immutable, unmodified rollouts cause no content reads.
+File rewrites do not advance activity recency; only observed turn starts can
+advance the existing native value. Name and status observations have independent
+ordering, so a newer file update can coexist with a concurrent rename. Older
+native metadata responses cannot overwrite newer file updates or removals.
+Interrupted updates and transient file-read failures remain eligible for the next scan, even when
+file size and modification time stay unchanged.
+Plain and compressed rollouts share the native logical `.jsonl` identity;
+the scanner prefers the plain file when both representations exist.
+
+Each home retains at most 20,000 display rows, 20,000 live-status records,
+20,000 name records, and 20,000 scan fingerprints, matching the existing Codex
+managed-thread ceiling; eviction drops the oldest archived rows first, then the
+oldest remaining rows. Native walks finish pagination, but rows beyond the
+resident limit are not projected. Plugin state also has its shared capacity limit. Persistence failure
+leaves the live resident view available and is logged; a missing complete
+snapshot rebuilds on restart. The derived cache adds no database schema-version
+change and does not alter native session files, update migrations, or rollback.
+Gateway aggregation only coalesces concurrent requests, so completed aggregate
+responses cannot delay the next poll's view of resident changes.
 
 Pasted text saved as a `.txt` attachment is extracted by OpenClaw and included in
 the current turn as untrusted external content, subject to the existing file

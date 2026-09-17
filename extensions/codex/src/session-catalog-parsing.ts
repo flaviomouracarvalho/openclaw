@@ -1,7 +1,11 @@
 import { asFiniteNumber, isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { sanitizeTerminalText } from "openclaw/plugin-sdk/text-chunking";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
-import type { CodexThread, CodexThreadTurnsListResponse } from "./app-server/protocol.js";
+import type {
+  CodexThread,
+  CodexThreadStatus,
+  CodexThreadTurnsListResponse,
+} from "./app-server/protocol.js";
 import {
   CODEX_INTERACTIVE_CUSTOM_THREAD_SOURCES,
   CODEX_INTERACTIVE_THREAD_SOURCE_KINDS,
@@ -28,7 +32,7 @@ export const MAX_CURSOR_LENGTH = 4096;
 const MAX_CURSOR_COUNT = 100;
 export const MAX_HOST_COUNT = 100;
 const MAX_HOST_ID_LENGTH = 256;
-const MAX_CWD_LENGTH = 4096;
+export const MAX_CWD_LENGTH = 4096;
 export const MAX_SESSION_ID_LENGTH = 256;
 const MAX_SESSION_NAME_LENGTH = 500;
 const MAX_SESSION_PREVIEW_LENGTH = 500;
@@ -125,6 +129,28 @@ export function isInteractiveThreadSource(source: unknown): boolean {
   return normalizeInteractiveThreadSource(source) !== undefined;
 }
 
+export function codexCatalogThreadName(value: unknown): string | null | undefined {
+  return value === null ? null : boundedCatalogString(value, MAX_SESSION_NAME_LENGTH, "truncate");
+}
+
+export function codexCatalogThreadStatus(
+  status: CodexThreadStatus | null | undefined,
+): Pick<CodexSessionCatalogSession, "status" | "activeFlags"> {
+  const activeFlags =
+    status?.type === "active"
+      ? status.activeFlags
+          ?.flatMap((flag) => {
+            const normalized = boundedCatalogString(flag, 128);
+            return normalized ? [normalized] : [];
+          })
+          .slice(0, MAX_ACTIVE_FLAGS)
+      : undefined;
+  return {
+    status: status?.type ?? "notLoaded",
+    ...(activeFlags?.length ? { activeFlags } : {}),
+  };
+}
+
 export function toCatalogSession(
   thread: CodexThread,
   archived: boolean,
@@ -141,18 +167,9 @@ export function toCatalogSession(
   if (!threadId) {
     return undefined;
   }
-  const activeFlags =
-    thread.status?.type === "active"
-      ? thread.status.activeFlags
-          ?.flatMap((flag) => {
-            const normalized = boundedCatalogString(flag, 128);
-            return normalized ? [normalized] : [];
-          })
-          .slice(0, MAX_ACTIVE_FLAGS)
-      : undefined;
   const gitInfo = isRecord(record.gitInfo) ? record.gitInfo : undefined;
   const sessionId = boundedCatalogString(thread.sessionId, MAX_SESSION_ID_LENGTH);
-  const name = boundedCatalogString(thread.name, MAX_SESSION_NAME_LENGTH, "truncate");
+  const name = codexCatalogThreadName(thread.name);
   const fallbackName = name ? undefined : catalogPreview(thread.preview, sanitize);
   const cwd = boundedCatalogString(thread.cwd, MAX_CWD_LENGTH);
   const modelProvider = boundedCatalogString(record.modelProvider, MAX_METADATA_LENGTH, "truncate");
@@ -160,13 +177,12 @@ export function toCatalogSession(
   const gitBranch = boundedCatalogString(gitInfo?.branch, MAX_METADATA_LENGTH, "truncate");
   return {
     threadId,
-    status: thread.status?.type ?? "notLoaded",
+    ...codexCatalogThreadStatus(thread.status),
     archived,
     ...(sessionId ? { sessionId } : {}),
     ...(thread.name === null ? { name: null } : name ? { name } : {}),
     ...(fallbackName ? { fallbackName } : {}),
     ...(cwd ? { cwd } : {}),
-    ...(activeFlags?.length ? { activeFlags } : {}),
     ...(typeof thread.createdAt === "number" && Number.isFinite(thread.createdAt)
       ? { createdAt: thread.createdAt }
       : {}),

@@ -76,10 +76,7 @@ describe("Codex supervision actions", () => {
     let runtimeConfig = initialRuntimeConfig;
     pinnedConnectionMocks.request.mockImplementation(
       async (request: { method: string; requestParams?: Record<string, unknown> }) => {
-        if (
-          request.method === "thread/list" &&
-          request.requestParams?.ancestorThreadId === undefined
-        ) {
+        if (request.method === "thread/read") {
           pluginConfig = {
             appServer: { command: "codex-archive-b", homeScope: "agent" },
             supervision: { enabled: true },
@@ -87,12 +84,10 @@ describe("Codex supervision actions", () => {
           runtimeConfig = {
             agents: { defaults: { workspace: "/workspace/b" } },
           } as OpenClawConfig;
-          return {
-            data: [idleThread({ source: "cli" })],
-          };
+          return { thread: idleThread({ source: "cli" }) };
         }
         if (request.method === "thread/read") {
-          return { thread: idleThread() };
+          return { thread: idleThread({ source: "cli" }) };
         }
         if (request.method === "thread/list") {
           return { data: [] };
@@ -108,6 +103,11 @@ describe("Codex supervision actions", () => {
       getRuntimeConfig: () => runtimeConfig,
     });
 
+    commandRpcMocks.codexControlRequest.mockResolvedValue({
+      data: [idleThread({ source: "cli" })],
+    });
+    await control.initialize();
+    commandRpcMocks.codexControlRequest.mockClear();
     await expect(archiveTestSession({ config: initialRuntimeConfig, control })).resolves.toEqual({
       archived: true,
     });
@@ -120,7 +120,7 @@ describe("Codex supervision actions", () => {
       config: { agents: { list: [{ id: "alpha" }, { id: "beta" }] } },
     });
     expect(pinnedConnectionMocks.request.mock.calls.map(([request]) => request.method)).toEqual([
-      "thread/list",
+      "thread/read",
       "thread/read",
       "thread/list",
       "thread/archive",
@@ -135,15 +135,13 @@ describe("Codex supervision actions", () => {
 
   it("finishes a pinned archive when supervision config changes", async () => {
     let pluginConfig: unknown = { supervision: { enabled: true } };
-    let listCalls = 0;
     pinnedConnectionMocks.request.mockImplementation(async (request: { method: string }) => {
       if (request.method === "thread/list") {
-        listCalls += 1;
-        return listCalls === 1 ? { data: [idleThread({ source: "cli" })] } : { data: [] };
+        return { data: [] };
       }
       if (request.method === "thread/read") {
         pluginConfig = { supervision: { enabled: false } };
-        return { thread: idleThread() };
+        return { thread: idleThread({ source: "cli" }) };
       }
       if (request.method === "thread/archive") {
         return {};
@@ -155,9 +153,14 @@ describe("Codex supervision actions", () => {
       getRuntimeConfig: () => config,
     });
 
+    commandRpcMocks.codexControlRequest.mockResolvedValue({
+      data: [idleThread({ source: "cli" })],
+    });
+    await control.initialize();
+    commandRpcMocks.codexControlRequest.mockClear();
     await expect(archiveTestSession({ control })).resolves.toEqual({ archived: true });
     expect(pinnedConnectionMocks.request.mock.calls.map(([request]) => request.method)).toEqual([
-      "thread/list",
+      "thread/read",
       "thread/read",
       "thread/list",
       "thread/archive",

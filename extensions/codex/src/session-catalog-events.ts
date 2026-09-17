@@ -1,0 +1,142 @@
+import { createHash } from "node:crypto";
+import fs from "node:fs/promises";
+import path from "node:path";
+import { embeddedAgentLog } from "openclaw/plugin-sdk/agent-harness-registration";
+import { resolveCodexAppServerLocalHomeDir } from "./app-server/auth-start-options.js";
+import type { CodexAppServerClient, CodexAppServerRuntimeIdentity } from "./app-server/client.js";
+import type { CodexAppServerStartOptions } from "./app-server/config-contracts.js";
+import { inferCodexAppServerConnectionClass } from "./app-server/config-security.js";
+import { buildCodexAppServerConnectionFingerprint } from "./app-server/plugin-app-cache-key.js";
+import type { CodexServerNotification, CodexThread } from "./app-server/protocol.js";
+import { defineCodexBuildState } from "./build-state.js";
+import { codexCatalogHomeIdFromCanonicalPath } from "./session-catalog-home-id.js";
+
+type CodexCatalogEventListener = (
+  event: CodexServerNotification,
+  readThread: (threadId: string) => Promise<CodexThread>,
+) => void;
+type CodexCatalogSubscription = {
+  notify: CodexCatalogEventListener;
+} & CodexCatalogLifecycleCallbacks;
+type CodexCatalogLifecycleCallbacks = {
+  onRemoteReady?: () => void;
+  onClose?: () => void;
+};
+
+const getCatalogEvents = defineCodexBuildState("openclaw.codexCatalogEvents", () => ({
+  listeners: new Map<string, Set<CodexCatalogSubscription>>(),
+  clients: new WeakMap<CodexAppServerClient, Promise<void>>(),
+}));
+
+const CATALOG_NOTIFICATION_METHODS = new Set([
+  "thread/started",
+  "turn/completed",
+  "thread/archived",
+  "thread/deleted",
+  "thread/unarchived",
+  "thread/reverted",
+  "thread/name/updated",
+  "thread/status/changed",
+]);
+
+/** Uses prepared local identity or resolves it once during client/index startup. */
+export async function codexCatalogResidentHomeKey(params: {
+  startOptions: CodexAppServerStartOptions;
+  agentDir?: string;
+  sourceHomeId?: string;
+  runtimeIdentity?: CodexAppServerRuntimeIdentity;
+}): Promise<string> {
+  if (inferCodexAppServerConnectionClass(params.startOptions) === "remote") {
+    const fingerprint = buildCodexAppServerConnectionFingerprint(
+      { start: params.startOptions, connectionClass: "remote" },
+      params.agentDir,
+    );
+    return `remote:${createHash("sha256").update(fingerprint).digest("hex")}`;
+  }
+  if (params.sourceHomeId) {
+    return params.sourceHomeId;
+  }
+  const home = path.resolve(
+    params.runtimeIdentity?.codexHome ??
+      resolveCodexAppServerLocalHomeDir(params.startOptions, params.agentDir),
+  );
+  return codexCatalogHomeIdFromCanonicalPath(await fs.realpath(home).catch(() => home));
+}
+
+export function subscribeCodexCatalogEvents(
+  homeKey: string,
+  listener: CodexCatalogEventListener,
+  callbacks: CodexCatalogLifecycleCallbacks = {},
+): () => void {
+  const { listeners } = getCatalogEvents();
+  let homeListeners = listeners.get(homeKey);
+  if (!homeListeners) {
+    homeListeners = new Set();
+    listeners.set(homeKey, homeListeners);
+  }
+  const subscription = { notify: listener, ...callbacks };
+  homeListeners.add(subscription);
+  return () => {
+    homeListeners.delete(subscription);
+    if (homeListeners.size === 0 && listeners.get(homeKey) === homeListeners) {
+      listeners.delete(homeKey);
+    }
+  };
+}
+
+/** Observes physical clients without extending their lease or native thread lifetime. */
+export function observeCodexCatalogClient(
+  client: CodexAppServerClient,
+  params: { startOptions: CodexAppServerStartOptions; agentDir?: string },
+): Promise<void> {
+  const state = getCatalogEvents();
+  const existing = state.clients.get(client);
+  if (existing) {
+    return existing;
+  }
+  const observing = (async () => {
+    const homeKey = await codexCatalogResidentHomeKey({
+      ...params,
+      runtimeIdentity: client.getRuntimeIdentity(),
+    });
+    if (client.getCloseError()) {
+      return;
+    }
+    const notifyLifecycle = (callback: keyof CodexCatalogLifecycleCallbacks) => {
+      for (const listener of state.listeners.get(homeKey) ?? []) {
+        try {
+          listener[callback]?.();
+        } catch (error) {
+          // Catalog observers must not replace physical startup or close outcomes.
+          embeddedAgentLog.warn("Codex catalog lifecycle observer failed", { callback, error });
+        }
+      }
+    };
+    const readThread = async (threadId: string) =>
+      (
+        await client.request(
+          "thread/read",
+          { threadId, includeTurns: false },
+          { timeoutMs: 60_000 },
+        )
+      ).thread;
+    const stopNotifications = client.addNotificationHandler((event) => {
+      if (!CATALOG_NOTIFICATION_METHODS.has(event.method)) {
+        return;
+      }
+      for (const listener of state.listeners.get(homeKey) ?? []) {
+        listener.notify(event, readThread);
+      }
+    });
+    const stopClose = client.addCloseHandler(() => {
+      stopNotifications();
+      stopClose();
+      notifyLifecycle("onClose");
+    });
+    if (inferCodexAppServerConnectionClass(params.startOptions) === "remote") {
+      notifyLifecycle("onRemoteReady");
+    }
+  })();
+  state.clients.set(client, observing);
+  return observing;
+}

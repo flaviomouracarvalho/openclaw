@@ -5,6 +5,7 @@ import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import { markPluginRegistryActive } from "../../plugins/registry-lifecycle.js";
 import type { PluginRegistry } from "../../plugins/registry-types.js";
 import type { SessionCatalogProvider } from "../../plugins/session-catalog.js";
+import { createDeferredCore } from "../../shared/deferred.js";
 
 type TestPluginRegistry = Omit<PluginRegistry, "sessionCatalogs"> & {
   sessionCatalogs: Array<{ provider: SessionCatalogProvider }>;
@@ -463,18 +464,23 @@ describe("session catalog caller visibility", () => {
     expect(transcript).toHaveBeenCalledWith(true, readResult);
   });
 
-  it("keeps settled catalog enumeration when only owner attribution arrives", async () => {
+  it("shares concurrent catalog enumeration when only owner attribution arrives", async () => {
     const listedHost = host([session("unadopted-thread")]);
-    const list = vi.fn(async () => [listedHost]);
+    const release = createDeferredCore();
+    const list = vi.fn(async () => {
+      await release.promise;
+      return [listedHost];
+    });
     hoisted.activeRegistry.sessionCatalogs = [{ provider: provider({ list }) }];
     const requestClient = unprofiledClient();
     const config = {};
 
-    const before = await call("sessions.catalog.list", {}, requestClient, config);
+    const before = call("sessions.catalog.list", {}, requestClient, config);
     requestClient.authenticatedUserProfile = { profileId: GATEWAY_OWNER_PROFILE_ID };
-    const after = await call("sessions.catalog.list", {}, requestClient, config);
+    const after = call("sessions.catalog.list", {}, requestClient, config);
+    release.resolve();
 
-    for (const respond of [before, after]) {
+    for (const respond of await Promise.all([before, after])) {
       expect(respond).toHaveBeenCalledWith(true, {
         catalogs: [expect.objectContaining({ hosts: [listedHost] })],
       });
