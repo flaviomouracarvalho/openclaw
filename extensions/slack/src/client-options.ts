@@ -130,13 +130,33 @@ function applySlackApiUrlAndProxyOptions(
   }
 }
 
+function applySlackActionAuthority(
+  options: WebClientOptions,
+  dispatcher: SlackProxyDispatcher | undefined,
+  assertDirectAdapterHandoff: (() => void) | undefined,
+): void {
+  if (!assertDirectAdapterHandoff) {
+    return;
+  }
+  const slackFetch = options.fetch ?? buildSlackFetch(dispatcher);
+  if (!slackFetch) {
+    throw new Error("Slack request fetch is unavailable for scoped action.");
+  }
+  options.fetch = (input, init) => {
+    assertDirectAdapterHandoff();
+    return slackFetch(input, init);
+  };
+}
+
 export function resolveSlackWebClientOptions(
   options: WebClientOptions = {},
   dispatcher = resolveSlackProxyDispatcher(),
+  assertDirectAdapterHandoff?: () => void,
 ): WebClientOptions {
   const resolved: WebClientOptions = Object.assign({}, options);
   applySlackApiUrlAndProxyOptions(resolved, dispatcher);
   resolved.fetch ??= buildSlackFetch(dispatcher);
+  applySlackActionAuthority(resolved, dispatcher, assertDirectAdapterHandoff);
   resolved.retryConfig ??= SLACK_DEFAULT_RETRY_OPTIONS;
   return resolved;
 }
@@ -144,10 +164,11 @@ export function resolveSlackWebClientOptions(
 export function resolveSlackReadClientOptions(
   options: WebClientOptions = {},
   dispatcher = resolveSlackProxyDispatcher(),
+  assertDirectAdapterHandoff?: () => void,
 ): WebClientOptions {
   // The Slack SDK applies timeout per retry attempt. Keep its established read retry
   // policy, while ensuring any one stalled request eventually releases the caller.
-  const resolved = resolveSlackWebClientOptions(options, dispatcher);
+  const resolved = resolveSlackWebClientOptions(options, dispatcher, assertDirectAdapterHandoff);
   resolved.timeout ??= SLACK_READ_TIMEOUT_MS;
   return resolved;
 }
@@ -159,16 +180,7 @@ export function resolveSlackWriteClientOptions(
 ): WebClientOptions {
   const resolved: WebClientOptions = Object.assign({}, options);
   applySlackApiUrlAndProxyOptions(resolved, dispatcher);
-  if (assertDirectAdapterHandoff) {
-    const slackFetch = resolved.fetch ?? buildSlackFetch(dispatcher);
-    if (!slackFetch) {
-      throw new Error("Slack write fetch is unavailable for scoped action.");
-    }
-    resolved.fetch = (input, init) => {
-      assertDirectAdapterHandoff();
-      return slackFetch(input, init);
-    };
-  }
+  applySlackActionAuthority(resolved, dispatcher, assertDirectAdapterHandoff);
   resolved.retryConfig ??= SLACK_WRITE_RETRY_OPTIONS;
   // A caller's nonzero SDK retry policy already owns rate-limit recovery.
   if (resolved.rejectRateLimitedCalls !== true && resolved.retryConfig.retries === 0) {
@@ -218,9 +230,11 @@ export function resolveSlackWriteClientOptions(
 export function resolveSlackLookupClientOptions(
   options: SlackLookupClientOptions = {},
   dispatcher = resolveSlackProxyDispatcher(),
+  assertDirectAdapterHandoff?: () => void,
 ): WebClientOptions {
   const resolved: WebClientOptions = Object.assign({}, options);
   applySlackApiUrlAndProxyOptions(resolved, dispatcher);
+  applySlackActionAuthority(resolved, dispatcher, assertDirectAdapterHandoff);
   // Slack otherwise sleeps through the full Retry-After window after receiving 429,
   // outside the Axios request timeout.
   resolved.rejectRateLimitedCalls = true;

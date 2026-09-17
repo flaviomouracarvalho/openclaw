@@ -95,6 +95,7 @@ export const slackActionRuntime = {
     teamId?: string;
     operation?: "read" | "write";
     requireFreshName?: boolean;
+    assertDirectAdapterHandoff?: () => void;
   }) => (await loadSlackChannelTypeRuntime()).resolveSlackConversationInfo(params),
   resolveSlackChannelType: async (params: {
     cfg: OpenClawConfig;
@@ -366,6 +367,7 @@ async function assertSlackReadTargetAllowed(params: {
       channelId: params.channelId,
       teamId: params.teamId,
       operation: "read",
+      assertDirectAdapterHandoff: params.context?.assertDirectAdapterHandoff,
     });
     if (
       info.type !== "dm" ||
@@ -402,6 +404,7 @@ async function assertSlackReadTargetAllowed(params: {
     teamId: params.teamId,
     operation: "read",
     ...(preliminary.shouldResolveName ? { requireFreshName: true } : {}),
+    assertDirectAdapterHandoff: params.context?.assertDirectAdapterHandoff,
   });
   if (
     preliminary.shouldResolveName &&
