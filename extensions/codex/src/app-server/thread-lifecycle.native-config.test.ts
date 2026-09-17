@@ -19,9 +19,13 @@ import {
 } from "./thread-lifecycle.test-fixtures.js";
 setupRunAttemptTestHooks();
 describe("Codex native configuration lifecycle", () => {
-  it.each([false, true])(
-    "rebinds a resumed thread before warm reuse (native model: %s)",
-    async (nativeModel) => {
+  it.each([
+    { nativeModel: false, changeModel: false },
+    { nativeModel: true, changeModel: true },
+    { nativeModel: true, changeModel: false },
+  ])(
+    "rebinds before warm reuse (native: $nativeModel, changed model: $changeModel)",
+    async ({ nativeModel, changeModel }) => {
       const sessionFile = path.join(tempDir, "replacement-client-session.jsonl");
       const workspaceDir = path.join(tempDir, "replacement-client-workspace");
       registerCodexTestSessionIdentity(sessionFile, "session-1", "agent:main:session-1");
@@ -89,7 +93,20 @@ describe("Codex native configuration lifecycle", () => {
         undefined,
         resumed.liveThreadConfigFingerprint,
       );
+      if (changeModel) {
+        const native = threadStartResult("thread-reused");
+        fixture.seed(
+          { ...native, thread: { ...native.thread, model: "changed-native-model" } },
+          { loaded: true, subscribed: true },
+        );
+      }
       const warm = await startOrResumeThread(common);
+      if (changeModel) {
+        expect(warm.model).toBe("changed-native-model");
+        await expect(readCodexAppServerBinding(sessionFile)).resolves.toMatchObject({
+          model: "changed-native-model",
+        });
+      }
       expect(warm).toMatchObject({
         threadId: "thread-reused",
         clientId: client.getInstanceId(),
@@ -104,7 +121,7 @@ describe("Codex native configuration lifecycle", () => {
         "configRequirements/read",
         ...(nativeModel ? ["thread/read"] : []),
       ]);
-      if (nativeModel) {
+      if (nativeModel && !changeModel) {
         await retainCodexAppServerLiveThread(
           client,
           warm.threadId,
@@ -128,6 +145,19 @@ describe("Codex native configuration lifecycle", () => {
             ([method]) => method === "turn/interrupt" || method === "thread/archive",
           ),
         ).toBe(false);
+        expect(
+          request.mock.calls.filter(([method]) => method === "thread/unsubscribe"),
+        ).toHaveLength(0);
+        fixture.seed(native, { loaded: true, subscribed: true });
+        await expect(startOrResumeThread(common)).resolves.toMatchObject({
+          threadId: "thread-reused",
+        });
+        expect(request.mock.calls.filter(([method]) => method === "thread/resume")).toHaveLength(
+          resumeCount,
+        );
+        expect(
+          request.mock.calls.filter(([method]) => method === "thread/unsubscribe"),
+        ).toHaveLength(0);
       }
     },
   );

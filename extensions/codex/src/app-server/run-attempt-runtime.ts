@@ -26,6 +26,7 @@ import {
   buildLegacyScheduledCodexAppRecoveryPrompt,
 } from "./scheduled-app-authority.js";
 import { canResolveScheduledConfiguredMcpCreatorAuthority } from "./scheduled-configured-mcp-authority.js";
+import { fingerprintJsonObject } from "./thread-fingerprints.js";
 import { resolveCodexAppServerThreadModelSelection } from "./thread-lifecycle.js";
 import { resolveCodexWebSearchPlan } from "./web-search.js";
 
@@ -234,7 +235,15 @@ export async function prepareCodexAttemptRuntime(connection: CodexAttemptConnect
       ? "transient"
       : undefined;
   preDynamicStartupStages.mark("native-tool-surface");
+  // Newly discovered support must not replace an established supervised thread's
+  // disabled search policy. New branches still negotiate native capabilities.
+  const preserveDisabledNativeSearch =
+    usesSupervisionConnection &&
+    !mutable.startupBinding?.pendingSupervisionBranch &&
+    mutable.startupBinding?.webSearchThreadConfigFingerprint ===
+      fingerprintJsonObject(resolveCodexWebSearchPlan({ disableTools: true }).threadConfig);
   const nativeProviderWebSearchSupport =
+    !preserveDisabledNativeSearch &&
     resolveCodexWebSearchPlan({
       config: params.config,
       disableTools: params.disableTools,

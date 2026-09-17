@@ -63,6 +63,8 @@ describe("Codex native configuration", () => {
     { transport: "unix", hasAnswer: true, nativeProvider: "openai" },
     { transport: "unix", hasAnswer: false, nativeProvider: "openai" },
     { transport: "unix", hasAnswer: true, nativeProvider: "copilot" },
+    // Earlier releases recorded disabled search for custom native providers.
+    { transport: "stdio", hasAnswer: true, nativeProvider: "copilot" },
   ] as const)(
     "preserves supervised native model and transport/home guards over $transport (answer: $hasAnswer, provider: $nativeProvider)",
     async ({ transport, hasAnswer, nativeProvider }) => {
@@ -110,7 +112,7 @@ describe("Codex native configuration", () => {
         preserveNativeModel: true,
         conversationSourceTransferComplete: true,
         dynamicToolsFingerprint: codexDynamicToolsFingerprint([]),
-        ...(nativeProvider === "copilot"
+        ...(nativeProvider === "copilot" && transport === "unix"
           ? {
               webSearchThreadConfigFingerprint: JSON.stringify({
                 "features.standalone_web_search": false,
@@ -328,6 +330,12 @@ describe("Codex native configuration", () => {
       const resumeParams = resumeRequest?.params as Record<string, unknown> | undefined;
       expect(resumeParams).not.toHaveProperty("model");
       expect(resumeParams).not.toHaveProperty("modelProvider");
+      if (nativeProvider === "copilot") {
+        expect(resumeParams?.config).toMatchObject({
+          web_search: transport === "unix" ? "cached" : "disabled",
+        });
+        expect(requests.some(({ method }) => method === "thread/start")).toBe(false);
+      }
       expect(resumeParams?.approvalsReviewer).toBe(
         nativeProvider === "openai" ? "auto_review" : "user",
       );

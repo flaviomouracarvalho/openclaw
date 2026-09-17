@@ -141,6 +141,12 @@ to unload an idle thread first. If a turn reports a session policy handoff
 failure, finish native work and close other views of that specific thread,
 then reconnect and retry. Other threads and the daemon can stay running.
 
+Existing supervised conversations keep their recorded native search policy
+after an update. If native search was disabled when the conversation was
+created, newly advertised provider support does not enable it in that thread.
+Use **Continue as branch** to create a new conversation with the current native
+search capability and OpenClaw tool policy.
+
 ## Supervise Codex sessions
 
 The same `codex` plugin can list non-archived Codex sessions from the Gateway

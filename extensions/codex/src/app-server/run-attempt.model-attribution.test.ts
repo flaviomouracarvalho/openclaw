@@ -115,6 +115,7 @@ describe("registered Codex harness model attribution", () => {
         ),
       },
     });
+    let nativeModel = "ready-native-model";
     const readyThread = {
       ...threadStartResult("native-thread", { cwd: params.workspaceDir }),
       model: "ready-native-model",
@@ -148,7 +149,7 @@ describe("registered Codex harness model attribution", () => {
             result = { config: { model_provider: "openai" }, origins: {} };
             break;
           case "thread/read":
-            result = { thread: { ...readyThread.thread, path: rolloutPath } };
+            result = { thread: { ...readyThread.thread, model: nativeModel, path: rolloutPath } };
             break;
           case "thread/resume":
             send({
@@ -295,6 +296,7 @@ describe("registered Codex harness model attribution", () => {
         expect(request.params).not.toHaveProperty("modelProvider");
       }
       if (outcome === "completed") {
+        nativeModel = "changed-native-model";
         turnStarted = createDeferred<void>();
         const next = registered.runAttempt({ ...params, runId: "native-second-turn" });
         await Promise.race([
@@ -317,6 +319,14 @@ describe("registered Codex harness model attribution", () => {
         const second = await next;
         expect(second).toHaveProperty("terminal", { kind: "ok" });
         expect(second.assistantTexts).toEqual(["Second native answer."]);
+        expect(second.runtimeModelSelection).toEqual({ provider: "openai", model: nativeModel });
+        expect(second.currentAttemptAssistant).toMatchObject({
+          provider: "openai",
+          model: nativeModel,
+        });
+        expect(bindingStore.read(sessionBindingIdentity(params))).toMatchObject({
+          model: nativeModel,
+        });
         expect(requests.filter(({ method }) => method === "thread/resume")).toHaveLength(1);
         expect(requests.filter(({ method }) => method === "thread/unsubscribe")).toHaveLength(0);
         expect(requests.filter(({ method }) => method === "thread/inject_items")).toHaveLength(1);

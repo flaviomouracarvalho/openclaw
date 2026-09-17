@@ -120,12 +120,12 @@ export async function assertAdoptedCodexThreadResumeAllowed(
     ),
   );
   context.throwIfAborted();
+  if (thread.id !== threadId) {
+    throw new Error("Codex returned another thread during adoption status read");
+  }
   assertCodexThreadAcceptsDirectInput(thread);
   if (thread.status?.type === "active") {
     throw new CodexAdoptedThreadActiveError();
-  }
-  if (thread.id !== threadId) {
-    throw new Error("Codex returned another thread during adoption status read");
   }
   return thread;
 }

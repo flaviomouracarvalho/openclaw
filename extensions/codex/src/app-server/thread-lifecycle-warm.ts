@@ -21,13 +21,17 @@ import {
   mergeCodexThreadConfigs,
   type CodexPluginThreadConfig,
 } from "./plugin-thread-config.js";
+import type { CodexThread } from "./protocol.js";
 import type { CodexAppServerThreadBinding } from "./session-binding.js";
 import {
   captureCodexAppServerClientLifetime,
   retainSharedCodexAppServerClientByInstanceId,
 } from "./shared-client.js";
 import { fingerprintCodexThreadConfig } from "./thread-fingerprints.js";
-import { CodexThreadBindingConflictError } from "./thread-lifecycle-errors.js";
+import {
+  CodexAdoptedThreadActiveError,
+  CodexThreadBindingConflictError,
+} from "./thread-lifecycle-errors.js";
 import type { CodexThreadLifecycleTimingTracker } from "./thread-lifecycle-timing.js";
 import type {
   CodexAppServerThreadLifecycleBinding,
@@ -235,17 +239,27 @@ export async function tryReuseCodexLiveThread(
   };
   let ownershipTransferred = false;
   let preserveSubscription = false;
+  let nativeThread: CodexThread | undefined;
   try {
     assertWarmOwner();
     if (binding.preserveNativeModel || binding.connectionScope === "supervision") {
-      const thread = await assertAdoptedCodexThreadResumeAllowed(
-        params,
-        binding.threadId,
-        options,
-        assertWarmOwner,
-      );
+      try {
+        nativeThread = await assertAdoptedCodexThreadResumeAllowed(
+          params,
+          binding.threadId,
+          options,
+          assertWarmOwner,
+        );
+      } catch (error) {
+        if (error instanceof CodexAdoptedThreadActiveError) {
+          assertWarmOwner();
+          // Passive refusal must leave the verified configuration owner available for retry.
+          preserveSubscription = true;
+        }
+        throw error;
+      }
       assertWarmOwner();
-      if (thread.status?.type === "notLoaded") {
+      if (nativeThread.status?.type === "notLoaded") {
         preserveSubscription = true;
         return { kind: "resume" };
       }
@@ -346,7 +360,13 @@ export async function tryReuseCodexLiveThread(
     assertWarmOwner();
     const nativeHookRelayGeneration =
       prebuiltFinalConfigPatch.nativeHookRelayGeneration ?? binding.nativeHookRelayGeneration;
-    const model = binding.preserveNativeModel ? binding.model : startModelSelection.model;
+    // Older App Servers omit model metadata; newer ones report native changes between turns.
+    const model = binding.preserveNativeModel
+      ? nativeThread?.model?.trim() || binding.model
+      : startModelSelection.model;
+    const modelProvider = binding.preserveNativeModel
+      ? nativeThread?.modelProvider?.trim() || binding.modelProvider
+      : binding.modelProvider;
     // Validate ownership even when relay generation is unchanged; reset may
     // have replaced the persisted binding since it was first read. Model and
     // cwd are sticky turn settings, so future turns and /btw need current facts.
@@ -363,6 +383,7 @@ export async function tryReuseCodexLiveThread(
             patch: {
               cwd: params.cwd,
               model,
+              modelProvider,
               nativeHookRelayGeneration,
               environmentSelectionFingerprint,
             },
@@ -388,7 +409,13 @@ export async function tryReuseCodexLiveThread(
       binding: {
         ...binding,
         ...(!incognito
-          ? { cwd: params.cwd, model, nativeHookRelayGeneration, environmentSelectionFingerprint }
+          ? {
+              cwd: params.cwd,
+              model,
+              modelProvider,
+              nativeHookRelayGeneration,
+              environmentSelectionFingerprint,
+            }
           : {}),
         liveThreadConfigFingerprint,
         liveThreadEphemeralPolicy: retainedThread.ephemeralPolicy,
