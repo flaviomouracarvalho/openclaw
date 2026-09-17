@@ -8,12 +8,13 @@ import type { CodexCatalogStatus } from "./session-catalog-index-field.js";
 import { CODEX_CATALOG_MAX_ROWS } from "./session-catalog-index-state.js";
 import type { CodexCatalogIndexRow } from "./session-catalog-index-state.js";
 import { codexCatalogThreadName, codexCatalogThreadStatus } from "./session-catalog-parsing.js";
+import { setCodexCatalogSource, type CodexCatalogSource } from "./session-catalog-source.js";
 
 type ReadThread = (id: string) => Promise<CodexThread>;
 type CodexCatalogIndexEventOwner = {
   get(id: string): CodexCatalogIndexRow | undefined;
   rename(id: string, name: string | null): void;
-  updateStatus(id: string, status: CodexCatalogStatus): void;
+  updateStatus(id: string, status: CodexCatalogStatus, source: CodexCatalogSource): void;
   upsert(thread: CodexThread): Promise<void>;
   refresh(id: string, readThread: ReadThread): Promise<void>;
   archive(id: string): void;
@@ -31,7 +32,7 @@ export class CodexCatalogIndexEvents {
 
   constructor(private readonly owner: CodexCatalogIndexEventOwner) {}
 
-  handle(event: CodexServerNotification, readThread: ReadThread): void {
+  handle(event: CodexServerNotification, readThread: ReadThread, source: CodexCatalogSource): void {
     if (this.closed || !isRecord(event.params)) {
       return;
     }
@@ -49,7 +50,7 @@ export class CodexCatalogIndexEvents {
         return;
       }
       const operation = this.owner
-        .upsert(thread)
+        .upsert(setCodexCatalogSource(thread, source))
         .catch((error: unknown) => this.owner.report(error))
         .finally(() => this.upserting.delete(operation));
       this.upserting.add(operation);
@@ -80,7 +81,11 @@ export class CodexCatalogIndexEvents {
         return;
       }
       // SAFETY: native v2 ThreadStatusChangedNotification carries the protocol status union.
-      this.owner.updateStatus(id, codexCatalogThreadStatus(params.status as CodexThreadStatus));
+      this.owner.updateStatus(
+        id,
+        codexCatalogThreadStatus(params.status as CodexThreadStatus),
+        source,
+      );
       return;
     }
     if (

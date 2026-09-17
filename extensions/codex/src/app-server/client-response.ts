@@ -3,6 +3,10 @@ import {
   projectCodexCatalogNativeResponse,
   type CodexCatalogPreviewCache,
 } from "../session-catalog-native-projection.js";
+import {
+  recordCodexCatalogResponseSource,
+  type CodexCatalogSource,
+} from "../session-catalog-source.js";
 import { isJsonObject, type RpcResponse } from "./protocol.js";
 import type { CodexRequestAttempt } from "./request-attempt.js";
 import { CODEX_APP_SERVER_OVERLOADED_ERROR_CODE, CodexAppServerRpcError } from "./rpc-error.js";
@@ -12,6 +16,7 @@ export function dispatchCodexAppServerResponse(
   response: RpcResponse,
   attempts: Map<number | string, CodexRequestAttempt>,
   catalogResponses: WeakMap<CodexRequestAttempt, true | CodexCatalogPreviewCache>,
+  source: CodexCatalogSource,
 ): boolean {
   const pending = attempts.get(response.id);
   if (!pending) {
@@ -50,6 +55,7 @@ export function dispatchCodexAppServerResponse(
       return false;
     }
   }
+  recordCodexCatalogResponseSource(pending.method, response.result, source);
   pending.resolve(response.result);
   return nativeExecution;
 }

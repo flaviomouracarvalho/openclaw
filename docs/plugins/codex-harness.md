@@ -47,11 +47,14 @@ unchanged rows and do not ask Codex to scan or repair rollouts. Catalog requests
 never wait for them. A local database-only response can omit existing files when
 indexing is incomplete or unavailable, so omission alone does not remove a local
 row; verified file disappearance and explicit lifecycle events own removal.
-Loaded/active status has a separate memory-only lifecycle and resets to **Stored / activity unknown**
-after restart or an observed app-server connection closes, until fresh native
-events or metadata supply current status. Late responses from the closed
-connection cannot restore its active status. No native rollouts or
-transcripts are copied into the state database.
+Loaded/active status has a separate memory-only lifecycle. For each thread, at most
+64 native connections can support the same current status. Closing one connection
+or receiving its `notLoaded` status withdraws only that connection's observation;
+an unrelated helper cannot clear activity observed by another open connection.
+Status resets to **Stored / activity unknown** after restart or when its final
+observing connection closes, until fresh native events or metadata supply current
+status. Late responses from a closed connection cannot restore its active status.
+No native rollouts or transcripts are copied into the state database.
 For remote app-servers without local filesystem access, the saved snapshot is
 available immediately and a background native walk reconciles changes made while
 the Gateway was stopped or its app-server connection was unavailable. Every

@@ -10,17 +10,19 @@ import { buildCodexAppServerConnectionFingerprint } from "./app-server/plugin-ap
 import type { CodexServerNotification, CodexThread } from "./app-server/protocol.js";
 import { defineCodexBuildState } from "./build-state.js";
 import { codexCatalogHomeIdFromCanonicalPath } from "./session-catalog-home-id.js";
+import { codexCatalogSourceForClient, type CodexCatalogSource } from "./session-catalog-source.js";
 
 type CodexCatalogEventListener = (
   event: CodexServerNotification,
   readThread: (threadId: string) => Promise<CodexThread>,
+  source: CodexCatalogSource,
 ) => void;
 type CodexCatalogSubscription = {
   notify: CodexCatalogEventListener;
 } & CodexCatalogLifecycleCallbacks;
 type CodexCatalogLifecycleCallbacks = {
-  onRemoteReady?: () => void;
-  onClose?: () => void;
+  onRemoteReady?: (source: CodexCatalogSource) => void;
+  onClose?: (source: CodexCatalogSource) => void;
 };
 
 const getCatalogEvents = defineCodexBuildState("openclaw.codexCatalogEvents", () => ({
@@ -102,10 +104,11 @@ export function observeCodexCatalogClient(
     if (client.getCloseError()) {
       return;
     }
+    const source = codexCatalogSourceForClient(client);
     const notifyLifecycle = (callback: keyof CodexCatalogLifecycleCallbacks) => {
       for (const listener of state.listeners.get(homeKey) ?? []) {
         try {
-          listener[callback]?.();
+          listener[callback]?.(source);
         } catch (error) {
           // Catalog observers must not replace physical startup or close outcomes.
           embeddedAgentLog.warn("Codex catalog lifecycle observer failed", { callback, error });
@@ -125,7 +128,7 @@ export function observeCodexCatalogClient(
         return;
       }
       for (const listener of state.listeners.get(homeKey) ?? []) {
-        listener.notify(event, readThread);
+        listener.notify(event, readThread, source);
       }
     });
     const stopClose = client.addCloseHandler(() => {

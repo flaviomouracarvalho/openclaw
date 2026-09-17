@@ -41,7 +41,11 @@ export function registerSharedClientLifetimeTests(redirectNextStartToWebSocket: 
       const client = await acquiring;
       const event = { method: "thread/archived", params: { threadId: "thread-1" } };
       harness.send(event);
-      expect(receive).toHaveBeenCalledExactlyOnceWith(event, expect.any(Function));
+      expect(receive).toHaveBeenCalledExactlyOnceWith(
+        event,
+        expect.any(Function),
+        expect.objectContaining({ closed: false }),
+      );
       retireSharedCodexAppServerClientIfCurrent(client);
       expect(releaseLeasedSharedCodexAppServerClient(client)).toBe(true);
       expect(client.getCloseError()).toBeDefined();

@@ -5,7 +5,7 @@ import { embeddedAgentLog } from "openclaw/plugin-sdk/agent-harness-registration
 import type { CodexThreadListParams, CodexThread } from "./app-server/protocol.js";
 import { subscribeCodexCatalogEvents } from "./session-catalog-events.js";
 import { CodexCatalogIndexEvents } from "./session-catalog-index-events.js";
-import { CodexCatalogField, type CodexCatalogStatus } from "./session-catalog-index-field.js";
+import { CodexCatalogField } from "./session-catalog-index-field.js";
 import { applyCodexCatalogName } from "./session-catalog-index-names.js";
 import {
   compareCodexCatalogRows as order,
@@ -30,6 +30,8 @@ import {
   isCodexCatalogRolloutPathCovered,
   readCodexCatalogRollout,
 } from "./session-catalog-rollouts.js";
+import { getCodexCatalogSource } from "./session-catalog-source.js";
+import { CodexCatalogStatusIndex } from "./session-catalog-status.js";
 import type {
   CodexSessionCatalogPage,
   CodexSessionCatalogPageParams,
@@ -57,7 +59,7 @@ type IndexOptions = {
 /** One home owns all queries. Only hydration, notifications and directory currency do I/O. */
 export class CodexCatalogIndex {
   private readonly rows = new Map<string, CodexCatalogIndexRow>();
-  private readonly liveStatus = new CodexCatalogField<CodexCatalogStatus>();
+  private readonly liveStatus = new CodexCatalogStatusIndex();
   private readonly names = new CodexCatalogField<string | null>();
   private ordered: CodexCatalogIndexRow[] | undefined;
   private initializing: Promise<void> | undefined;
@@ -87,7 +89,7 @@ export class CodexCatalogIndex {
     this.persistence = new CodexCatalogPersistence(options.state, (error) => this.report(error));
     this.events = new CodexCatalogIndexEvents({
       get: (id) => this.rows.get(id),
-      updateStatus: (id, status) => this.liveStatus.update(id, status),
+      updateStatus: (id, status, source) => this.liveStatus.update(id, status, source),
       rename: (id, name) => {
         this.names.update(id, name);
         const row = this.rows.get(id);
@@ -103,9 +105,9 @@ export class CodexCatalogIndex {
     });
     this.unsubscribe = subscribeCodexCatalogEvents(
       options.homeId,
-      (event, readThread) => this.events.handle(event, readThread),
+      (event, readThread, source) => this.events.handle(event, readThread, source),
       {
-        onClose: () => this.liveStatus.invalidate(),
+        onClose: (source) => this.liveStatus.invalidate(source),
         onRemoteReady: () => {
           if (this.closed || options.localSessionsRoot) {
             return;
@@ -335,6 +337,7 @@ export class CodexCatalogIndex {
         ...(session.activeFlags ? { activeFlags: session.activeFlags } : {}),
       },
       revision.status,
+      getCodexCatalogSource(row),
     );
     if (
       session.name !== undefined &&
@@ -648,6 +651,7 @@ export class CodexCatalogIndex {
       {
         localSessionsRoot: this.options.localSessionsRoot,
         sanitize: sanitizeTerminalText,
+        source: getCodexCatalogSource(thread),
       },
     );
     if (this.closed) {

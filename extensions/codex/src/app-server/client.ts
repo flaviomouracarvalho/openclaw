@@ -12,6 +12,10 @@ import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runti
 import { sliceUtf16Safe, truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { parse as parseSemver } from "semver";
 import type { CodexCatalogPreviewCache } from "../session-catalog-native-projection.js";
+import {
+  closeCodexCatalogClientSource,
+  codexCatalogSourceForClient,
+} from "../session-catalog-source.js";
 import { dispatchCodexAppServerResponse } from "./client-response.js";
 import type { CodexAppServerStartOptions } from "./config-contracts.js";
 import { resolveCodexAppServerRuntimeOptions } from "./config-runtime.js";
@@ -979,8 +983,12 @@ export class CodexAppServerClient {
 
   private handleResponse(response: RpcResponse): void {
     this.nativeExecutionObserved =
-      dispatchCodexAppServerResponse(response, this.pending, this.catalogResponses) ||
-      this.nativeExecutionObserved;
+      dispatchCodexAppServerResponse(
+        response,
+        this.pending,
+        this.catalogResponses,
+        codexCatalogSourceForClient(this),
+      ) || this.nativeExecutionObserved;
   }
 
   private async handleServerRequest(
@@ -1132,6 +1140,7 @@ export class CodexAppServerClient {
       return false;
     }
     this.closed = true;
+    closeCodexCatalogClientSource(this);
     this.closeError = error;
     this.lines.close();
     this.rejectPendingRequests(error);

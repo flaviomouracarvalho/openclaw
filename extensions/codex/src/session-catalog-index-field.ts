@@ -37,6 +37,12 @@ export class CodexCatalogField<T> {
     this.put(threadId, { revision: ++this.revision });
   }
 
+  deleteWhere(predicate: (value: T) => boolean): void {
+    for (const [threadId, entry] of [...this.entries]) {
+      if (entry.value !== undefined && predicate(entry.value)) this.delete(threadId);
+    }
+  }
+
   invalidate(): void {
     this.minimumCapture = ++this.revision;
     this.entries.clear();

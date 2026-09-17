@@ -16,12 +16,19 @@ import {
 } from "./session-catalog-parsing.js";
 import { isOpenClawManagedCodexThread } from "./session-catalog-provenance.js";
 import { codexCatalogRolloutLogicalPath } from "./session-catalog-rollouts.js";
+import {
+  copyCodexCatalogSource,
+  getCodexCatalogSource,
+  setCodexCatalogSource,
+  type CodexCatalogSource,
+} from "./session-catalog-source.js";
 import type { CodexSessionCatalogPage } from "./session-catalog-types.js";
 
 type CodexCatalogProjectionParams = {
   localSessionsRoot?: string;
   diagnostics?: CodexCatalogPageDiagnostics | null;
   sanitize: typeof sanitizeTerminalText;
+  source?: CodexCatalogSource;
 };
 
 export async function projectCodexCatalogPage(
@@ -64,15 +71,20 @@ export async function projectCodexCatalogPage(
           page.sessions.push(session);
         }
       }
-      rows.push({
-        threadId: thread.id,
-        archived: false,
-        ...(thread.preview ? { preview: thread.preview } : {}),
-        ...(thread.path ? { rolloutPath: thread.path } : {}),
-        updatedAt: asFiniteNumber(thread.updatedAt) ?? null,
-        recencyAt: asFiniteNumber(thread.recencyAt) ?? null,
-        page,
-      });
+      rows.push(
+        setCodexCatalogSource(
+          {
+            threadId: thread.id,
+            archived: false,
+            ...(thread.preview ? { preview: thread.preview } : {}),
+            ...(thread.path ? { rolloutPath: thread.path } : {}),
+            updatedAt: asFiniteNumber(thread.updatedAt) ?? null,
+            recencyAt: asFiniteNumber(thread.recencyAt) ?? null,
+            page,
+          },
+          params.source ?? getCodexCatalogSource(thread),
+        ),
+      );
     }
     return {
       rows,
@@ -125,7 +137,7 @@ export async function projectCodexCatalogDeltaPage(
     }
     const named = applyCodexCatalogName(row, codexCatalogThreadName(thread.name));
     const status = codexCatalogThreadStatus(thread.status);
-    return {
+    return copyCodexCatalogSource(thread, {
       ...named,
       page: {
         ...named.page,
@@ -133,7 +145,7 @@ export async function projectCodexCatalogDeltaPage(
           Object.assign(session, status),
         ),
       },
-    };
+    });
   });
   const changed = await projectCodexCatalogPage(
     { ...response, data: response.data.filter((_thread, index) => !reusable[index]) },
