@@ -155,6 +155,7 @@ export function toCatalogSession(
   thread: CodexThread,
   archived: boolean,
   sanitize: typeof sanitizeTerminalText,
+  preparedPreview?: { value: string | undefined },
 ): CodexSessionCatalogSession | undefined {
   // Codex models Atlas and ChatGPT as custom sources but includes both in its
   // interactive default. Normalize those objects for the string-only catalog.
@@ -162,18 +163,21 @@ export function toCatalogSession(
   if (!source) {
     return undefined;
   }
-  const record = thread as CodexThread & Record<string, unknown>;
   const threadId = boundedCatalogString(thread.id, MAX_SESSION_ID_LENGTH);
   if (!threadId) {
     return undefined;
   }
-  const gitInfo = isRecord(record.gitInfo) ? record.gitInfo : undefined;
+  const gitInfo = isRecord(thread.gitInfo) ? thread.gitInfo : undefined;
   const sessionId = boundedCatalogString(thread.sessionId, MAX_SESSION_ID_LENGTH);
   const name = codexCatalogThreadName(thread.name);
-  const fallbackName = name ? undefined : catalogPreview(thread.preview, sanitize);
+  const fallbackName = name
+    ? undefined
+    : preparedPreview
+      ? preparedPreview.value
+      : catalogPreview(thread.preview, sanitize);
   const cwd = boundedCatalogString(thread.cwd, MAX_CWD_LENGTH);
-  const modelProvider = boundedCatalogString(record.modelProvider, MAX_METADATA_LENGTH, "truncate");
-  const cliVersion = boundedCatalogString(record.cliVersion, MAX_METADATA_LENGTH, "truncate");
+  const modelProvider = boundedCatalogString(thread.modelProvider, MAX_METADATA_LENGTH, "truncate");
+  const cliVersion = boundedCatalogString(thread.cliVersion, MAX_METADATA_LENGTH, "truncate");
   const gitBranch = boundedCatalogString(gitInfo?.branch, MAX_METADATA_LENGTH, "truncate");
   return {
     threadId,
@@ -189,9 +193,9 @@ export function toCatalogSession(
     ...(typeof thread.updatedAt === "number" && Number.isFinite(thread.updatedAt)
       ? { updatedAt: thread.updatedAt }
       : {}),
-    ...(typeof record.recencyAt === "number" && Number.isFinite(record.recencyAt)
-      ? { recencyAt: record.recencyAt }
-      : record.recencyAt === null
+    ...(typeof thread.recencyAt === "number" && Number.isFinite(thread.recencyAt)
+      ? { recencyAt: thread.recencyAt }
+      : thread.recencyAt === null
         ? { recencyAt: null }
         : {}),
     source,

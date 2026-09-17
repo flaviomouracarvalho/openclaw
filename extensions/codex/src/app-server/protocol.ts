@@ -456,6 +456,8 @@ export type CodexTurn = {
 export type CodexThread = {
   id: string;
   ephemeral?: boolean;
+  cliVersion?: string | null;
+  gitInfo?: { sha?: string | null; branch?: string | null; originUrl?: string | null } | null;
   forkedFromId?: string | null;
   parentThreadId?: string | null;
   sessionId?: string;

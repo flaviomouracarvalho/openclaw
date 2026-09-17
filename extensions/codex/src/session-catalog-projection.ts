@@ -2,13 +2,8 @@ import { asFiniteNumber } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { sanitizeTerminalText } from "openclaw/plugin-sdk/text-chunking";
 import type { CodexThread, CodexThreadListResponse } from "./app-server/protocol.js";
 import type { CodexCatalogPageDiagnostics } from "./session-catalog-diagnostics.js";
-import { applyCodexCatalogName } from "./session-catalog-index-names.js";
 import type { CodexCatalogIndexRow } from "./session-catalog-index-state.js";
 import {
-  boundedCatalogString,
-  codexCatalogThreadName,
-  codexCatalogThreadStatus,
-  MAX_CWD_LENGTH,
   readControlCursor,
   selectCodexCatalogPreviewInput,
   toCatalogSession,
@@ -123,28 +118,16 @@ export async function projectCodexCatalogDeltaPage(
 ) {
   const reusable = response.data.map((thread) => {
     const row = params.getRow(thread.id);
-    if (
-      thread.ephemeral === true ||
-      !row ||
-      !canReuseCodexCatalogPreview(row, thread) ||
-      (row.page.sessions.length > 0 &&
-        row.page.sessions[0]?.cwd !== boundedCatalogString(thread.cwd, MAX_CWD_LENGTH))
-    ) {
+    if (thread.ephemeral === true || !row || !canReuseCodexCatalogPreview(row, thread)) {
       return undefined;
     }
     if (row.page.sessions.length === 0) {
       return row;
     }
-    const named = applyCodexCatalogName(row, codexCatalogThreadName(thread.name));
-    const status = codexCatalogThreadStatus(thread.status);
+    const session = toCatalogSession(thread, false, params.sanitize, { value: row.preview });
     return copyCodexCatalogSource(thread, {
-      ...named,
-      page: {
-        ...named.page,
-        sessions: named.page.sessions.map(({ activeFlags: _previous, ...session }) =>
-          Object.assign(session, status),
-        ),
-      },
+      ...row,
+      page: { sessions: session ? [session] : [] },
     });
   });
   const changed = await projectCodexCatalogPage(

@@ -41,8 +41,10 @@ The index persists reconstructible display rows and file fingerprints through
 plugin state in the OpenClaw SQLite database. A restart loads this snapshot before
 serving the first list, then reconciles changed files in the background. A
 database-only native metadata walk recovers changes made while the Gateway was
-stopped and repeats every 30 seconds, including renames and the selected rollout
-path after a native revert. These coalesced background walks reuse previews for
+stopped and repeats every 30 seconds, including renames, Git branch and other displayed metadata, and the selected rollout
+path after a native revert. Metadata changes and explicit clears are applied even
+when native activity timestamps do not change. Newer Gateway observations fence
+older background pages. These coalesced background walks reuse previews for
 unchanged rows and do not ask Codex to scan or repair rollouts. Catalog requests
 never wait for them. A local database-only response can omit existing files when
 indexing is incomplete or unavailable, so omission alone does not remove a local

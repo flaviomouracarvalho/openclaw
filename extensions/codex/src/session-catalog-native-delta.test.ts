@@ -1,6 +1,9 @@
+import { setImmediate as nextTurn } from "node:timers/promises";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { expect, it, vi } from "vitest";
 import type { CodexThreadListResponse } from "./app-server/protocol.js";
+import { createClientHarness } from "./app-server/test-support.js";
+import { observeCodexCatalogClient } from "./session-catalog-events.js";
 import {
   commandRpcMocks,
   createCodexSessionCatalogControlFactory,
@@ -185,5 +188,103 @@ it("walks remote pages beyond the resident bound without projecting the uncached
     } finally {
       vi.useRealTimers();
     }
+  }
+});
+
+it("reconciles displayed native metadata and explicit Git clears without activity or file changes", async () => {
+  const native = Object.assign(
+    idleThread({
+      id: "metadata",
+      name: "Unchanged title",
+      source: "cli",
+      cwd: "/workspace/project",
+      createdAt: 10,
+      updatedAt: 100,
+      recencyAt: 100,
+      sessionId: "previous-session",
+    }),
+    { cliVersion: "0.154.0", gitInfo: { branch: "previous-branch" } },
+  );
+  commandRpcMocks.codexControlRequest.mockImplementation(async (_plugin, method, params) => {
+    expect(method).toBe("thread/list");
+    if (commandRpcMocks.codexControlRequest.mock.calls.length > 1) {
+      expect(params.useStateDbOnly).toBe(true);
+    }
+    return { data: [native] };
+  });
+  const factory = createCodexSessionCatalogControlFactory({
+    getPluginConfig: () => ({ supervision: { enabled: true } }),
+    getRuntimeConfig: () => undefined,
+  });
+  const source = (await factory.homesForAgent("main"))[0]!;
+  const control = factory.forRequest("main", source);
+  const client = createClientHarness();
+  const requested = createDeferred<void>();
+  const release = createDeferred<void>();
+  await observeCodexCatalogClient(client.client, {
+    startOptions: source.appServer.start,
+    agentDir: source.agentDir,
+  });
+  vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+  try {
+    await control.initialize();
+    expect((await control.listPage({})).sessions[0]).toMatchObject({
+      gitBranch: "previous-branch",
+    });
+    // Native paginated metadata updates leave activity timestamps and rollouts untouched.
+    Object.assign(native, {
+      gitInfo: { branch: "updated-branch" },
+      cliVersion: "0.155.0",
+      modelProvider: "updated-provider",
+      createdAt: 20,
+      sessionId: "current-session",
+      source: "vscode",
+    });
+    await vi.advanceTimersByTimeAsync(30_000);
+    await vi.waitFor(async () => {
+      expect((await control.listPage({})).sessions[0]).toMatchObject({
+        gitBranch: "updated-branch",
+        cliVersion: "0.155.0",
+        modelProvider: "updated-provider",
+        createdAt: 20,
+        sessionId: "current-session",
+        source: "vscode",
+        updatedAt: 100,
+        recencyAt: 100,
+      });
+    });
+    Object.assign(native, { gitInfo: null });
+    await vi.advanceTimersByTimeAsync(30_000);
+    await vi.waitFor(async () => {
+      expect((await control.listPage({})).sessions[0]).not.toHaveProperty("gitBranch");
+    });
+    expect(commandRpcMocks.codexControlRequest).toHaveBeenCalledTimes(3);
+    const older = structuredClone(native);
+    commandRpcMocks.codexControlRequest.mockImplementationOnce(async () => {
+      requested.resolve();
+      await release.promise;
+      return { data: [older] };
+    });
+    await vi.advanceTimersByTimeAsync(30_000);
+    await requested.promise;
+    client.send({ method: "turn/completed", params: { threadId: native.id, turn: {} } });
+    const request = JSON.parse(await client.waitForWrite(0));
+    expect(request.method).toBe("thread/read");
+    client.send({
+      id: request.id,
+      result: { thread: { ...native, gitInfo: { branch: "newer-completion" } } },
+    });
+    await vi.waitFor(async () => {
+      expect((await control.listPage({})).sessions[0]?.gitBranch).toBe("newer-completion");
+    });
+    release.resolve();
+    await nextTurn();
+    expect((await control.listPage({})).sessions[0]?.gitBranch).toBe("newer-completion");
+    expect(commandRpcMocks.codexControlRequest).toHaveBeenCalledTimes(4);
+  } finally {
+    release.resolve();
+    await client.client.closeAndWait();
+    await factory.stop();
+    vi.useRealTimers();
   }
 });
