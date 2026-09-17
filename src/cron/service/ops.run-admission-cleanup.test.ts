@@ -10,6 +10,13 @@ import {
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { DEFAULT_CRON_MAX_CONCURRENT_RUNS } from "../../config/cron-limits.js";
 import {
+  captureGatewayDeviceRevocation,
+  closeGatewayDeviceRevocation,
+  invalidateGatewayDeviceRevocation,
+} from "../../gateway/device-revocation.js";
+import { resolveCronMutationCommitGuard } from "../../gateway/server-methods/cron-caller-scope.js";
+import type { GatewayRequestContext } from "../../gateway/server-methods/types.js";
+import {
   clearCommandLane,
   enqueueCommandInLane,
   getTotalQueueSize,
@@ -22,6 +29,7 @@ import {
 } from "../../process/gateway-work-admission.js";
 import { CommandLane } from "../../process/lanes.js";
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
+import { createCronMutationCompletion } from "../mutation-completion.js";
 import { loadCronStore, saveCronStore } from "../store.js";
 import { cronStoreKey } from "../store/key.js";
 import { locked } from "./locked.js";
@@ -81,6 +89,12 @@ describe("cron service run admission cleanup", () => {
       });
       await saveCronStore(store.storePath, { version: 1, jobs: [job] });
       const before = await loadCronStore(store.storePath);
+      const context = {} as GatewayRequestContext;
+      const caller = captureGatewayDeviceRevocation(
+        context,
+        { deviceId: "unaccepted-device", role: "operator" },
+        () => true,
+      );
       const controller = new AbortController();
       const preflightObserved = createDeferred();
       const runIsolatedAgentJob = vi.fn(async () => ({ status: "ok" as const }));
@@ -106,19 +120,24 @@ describe("cron service run admission cleanup", () => {
           ? expectDefined(tryBeginGatewayRootWorkAdmission(), "request root unavailable")
           : undefined;
       let observed = false;
-      const commitGuard = () => {
-        controller.signal.throwIfAborted();
-        if (!observed) {
-          observed = true;
-          queueMicrotask(() => {
-            if (boundary === "after preflight") {
-              controller.abort(new Error("queue request cancelled"));
-            }
-            preflightObserved.resolve();
-          });
-        }
-      };
-      const enqueue = () => enqueueRun(state, job.id, "force", { commitGuard });
+      const commitGuard = resolveCronMutationCommitGuard(null, context, undefined, {
+        hasCurrentClientAuthority: caller.isCurrent,
+        sessionMutationCommitGuard: () => {
+          controller.signal.throwIfAborted();
+          if (!observed) {
+            observed = true;
+            queueMicrotask(() => {
+              if (boundary === "after preflight") {
+                controller.abort(new Error("queue request cancelled"));
+              }
+              preflightObserved.resolve();
+            });
+          }
+        },
+      });
+      const completion = expectDefined(createCronMutationCompletion("cron.run"), "missing receipt");
+      const enqueue = () =>
+        completion.run(() => enqueueRun(state, job.id, "force", { commitGuard }));
       const pending = requestRoot ? requestRoot.run(enqueue) : enqueue();
       let settled = false;
       const outcome = pending.then(
@@ -141,15 +160,21 @@ describe("cron service run admission cleanup", () => {
         }
         await expect(pending).rejects.toThrow("queue request cancelled");
         await outcome;
+        expect(completion.isCommitted()).toBe(false);
         expect(getTotalQueueSize()).toBe(0);
         expect(await loadCronStore(store.storePath)).toEqual(before);
         expect(onEvent).not.toHaveBeenCalled();
         expect(runIsolatedAgentJob).not.toHaveBeenCalled();
+        caller.release();
+        expect(caller.isCurrent()).toBe(false);
       } finally {
         controller.abort();
+        invalidateGatewayDeviceRevocation(context, "unaccepted-device", "operator");
         suspension?.release();
         requestRoot?.release();
         await outcome;
+        caller.release();
+        closeGatewayDeviceRevocation(context);
         clearCommandLane(CommandLane.Cron);
         stop(state);
         resetGatewayWorkAdmission();
@@ -296,50 +321,78 @@ describe("cron service run admission cleanup", () => {
     },
   );
 
-  it("rejects queued manual reservation after caller authority closes", async () => {
-    vi.useRealTimers();
-    clearCommandLane(CommandLane.Cron);
-    setCommandLaneConcurrency(CommandLane.Cron, 1);
-    const store = opsRegressionFixtures.makeStorePath();
-    const dueAt = Date.parse("2026-02-06T10:05:03.000Z");
-    const job = createDueIsolatedJob({
-      id: "revoked-queued-run",
-      nowMs: dueAt,
-      nextRunAtMs: dueAt,
-    });
-    await saveCronStore(store.storePath, { version: 1, jobs: [job] });
-    const blockerStarted = createDeferred();
-    const releaseBlocker = createDeferred();
-    const blocker = enqueueCommandInLane(CommandLane.Cron, async () => {
-      blockerStarted.resolve();
-      return await releaseBlocker.promise;
-    });
-    await blockerStarted.promise;
-    let authorityActive = true;
-    const runIsolatedAgentJob = vi.fn(async () => ({ status: "ok" as const }));
-    const state = createCronRegressionState({
-      storePath: store.storePath,
-      nowMs: () => dueAt,
-      runIsolatedAgentJob,
-    });
+  it.each([false, true])(
+    "retains the disconnected queued caller until settlement (revoked: %s)",
+    async (revoked) => {
+      vi.useRealTimers();
+      clearCommandLane(CommandLane.Cron);
+      setCommandLaneConcurrency(CommandLane.Cron, 1);
+      const store = opsRegressionFixtures.makeStorePath();
+      const dueAt = Date.parse("2026-02-06T10:05:03.000Z");
+      const job = createDueIsolatedJob({
+        id: "revoked-queued-run",
+        nowMs: dueAt,
+        nextRunAtMs: dueAt,
+      });
+      await saveCronStore(store.storePath, { version: 1, jobs: [job] });
+      const blockerStarted = createDeferred();
+      const releaseBlocker = createDeferred();
+      const blocker = enqueueCommandInLane(CommandLane.Cron, async () => {
+        blockerStarted.resolve();
+        return await releaseBlocker.promise;
+      });
+      await blockerStarted.promise;
+      const context = {};
+      const connection = new AbortController();
+      const caller = captureGatewayDeviceRevocation(
+        context,
+        { deviceId: "queued-device", role: "operator" },
+        () => true,
+        connection.signal,
+      );
+      const runIsolatedAgentJob = vi.fn(async () => ({ status: "ok" as const }));
+      const state = createCronRegressionState({
+        storePath: store.storePath,
+        nowMs: () => dueAt,
+        runIsolatedAgentJob,
+      });
 
-    const ack = await enqueueRun(state, job.id, "force", {
-      commitGuard: () => {
-        if (!authorityActive) {
-          throw new TypeError("authority closed");
+      try {
+        const commitGuard = resolveCronMutationCommitGuard(
+          null,
+          context as GatewayRequestContext,
+          undefined,
+          { hasCurrentClientAuthority: caller.isCurrent },
+        );
+        const completion = createCronMutationCompletion("cron.run");
+        if (!completion) {
+          throw new Error("Expected Cron completion owner");
         }
-      },
-    });
-    expect(ack).toMatchObject({ ok: true, enqueued: true, runId: expect.any(String) });
-    authorityActive = false;
-    releaseBlocker.resolve();
-    await blocker;
-    await vi.waitFor(() => expect(getTotalQueueSize()).toBe(0), { timeout: 5_000 });
+        const ack = await completion.run(() => enqueueRun(state, job.id, "force", { commitGuard }));
+        expect(ack).toMatchObject({ ok: true, enqueued: true, runId: expect.any(String) });
+        expect(completion.isCommitted()).toBe(true);
+        caller.release();
+        connection.abort();
+        expect(caller.isCurrent()).toBe(true);
+        if (revoked) {
+          invalidateGatewayDeviceRevocation(context, "queued-device", "operator");
+        }
+        releaseBlocker.resolve();
+        await blocker;
+        await vi.waitFor(() => expect(getTotalQueueSize()).toBe(0), { timeout: 5_000 });
 
-    expect(runIsolatedAgentJob).not.toHaveBeenCalled();
-    expect((await loadCronStore(store.storePath)).jobs[0]?.state.queuedAtMs).toBeUndefined();
-    clearCommandLane(CommandLane.Cron);
-  });
+        expect(runIsolatedAgentJob).toHaveBeenCalledTimes(revoked ? 0 : 1);
+        expect((await loadCronStore(store.storePath)).jobs[0]?.state.queuedAtMs).toBeUndefined();
+        expect(caller.isCurrent()).toBe(false);
+      } finally {
+        caller.release();
+        releaseBlocker.resolve();
+        await blocker;
+        clearCommandLane(CommandLane.Cron);
+        stop(state);
+      }
+    },
+  );
 
   it.each([
     { mode: "force" as const, evaluation: "completed" as const },

@@ -9,6 +9,7 @@ import {
   getRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
 } from "../../config/runtime-snapshot.js";
+import { waitForSessionTranscriptIndexReconcilesInStateDir } from "../../config/sessions/session-transcript-reconcile.js";
 import { isPathInside } from "../../infra/path-guards.js";
 import {
   collectActiveSessionWorkAdmissions,
@@ -56,6 +57,7 @@ export async function releaseGatewaySessionStoreFixture(dir: string) {
     delete session.store;
     setRuntimeConfigSnapshot({ ...cfg, session });
   }
+  await waitForSessionTranscriptIndexReconcilesInStateDir(root);
   for (const database of listOpenClawRegisteredAgentDatabases()) {
     if (isPathInside(root, database.path)) {
       unregisterOpenClawAgentDatabase(database);

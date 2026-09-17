@@ -1,4 +1,8 @@
 import { AsyncLocalStorage } from "node:async_hooks";
+import {
+  createCronMutationCompletion,
+  type CronMutationCompletion,
+} from "../../cron/mutation-completion.js";
 import type { AgentRuntimeIdentity } from "../../gateway/agent-runtime-identity-token.js";
 /** In-process Gateway calls for built-in agent tools. */
 import type { CallGatewayOptions } from "../../gateway/call.js";
@@ -133,16 +137,19 @@ async function runBoundInProcessGatewayCall<T>(
   run: (resolveGatewayContext?: GatewayContextResolver) => Promise<T>,
   assertCallerCurrent?: () => void,
   revalidateOnCompletion = true,
+  completion?: CronMutationCompletion,
 ): Promise<T> {
   const assertCurrent = (afterDispatch = false) => {
     boundGateway?.assertCurrent();
-    if (!afterDispatch || revalidateOnCompletion) {
+    if (!afterDispatch || (completion ? !completion.isCommitted() : revalidateOnCompletion)) {
       assertCallerCurrent?.();
     }
   };
   try {
     assertCurrent();
-    const result = await run(boundGateway?.resolve);
+    const result = completion
+      ? await completion.run(() => run(boundGateway?.resolve))
+      : await run(boundGateway?.resolve);
     assertCurrent(true);
     return result;
   } catch (error) {
@@ -182,24 +189,28 @@ async function callAgentToolGatewayRequestBound<T>(
   request: AgentToolGatewayRequest,
   resolveGatewayContext: GatewayContextResolver | undefined,
   runtimeIdentity: AgentRuntimeIdentity | undefined,
-  assertCallerCurrent: (() => void) | undefined,
+  assertCallerCurrent: ReturnType<typeof captureGatewayToolCallerAssertion>,
   forceTransport = false,
   revalidateOnCompletion = true,
 ): Promise<T> {
+  const method = request.method;
   const assertDispatchCurrent = request.assertDispatchCurrent;
+  const completion = createCronMutationCompletion(method);
   const assertCurrent =
-    assertCallerCurrent || assertDispatchCurrent || (!revalidateOnCompletion && request.signal)
+    assertCallerCurrent ||
+    assertDispatchCurrent ||
+    ((!revalidateOnCompletion || completion) && request.signal)
       ? () => {
-          assertCallerCurrent?.();
+          assertCallerCurrent?.(method);
           assertDispatchCurrent?.();
-          if (!revalidateOnCompletion) {
+          if (!revalidateOnCompletion || completion) {
             request.signal?.throwIfAborted();
           }
         }
       : undefined;
   assertCurrent?.();
   const boundGateway = resolveGatewayContext
-    ? bindInProcessGatewayContext(request.method, resolveGatewayContext)
+    ? bindInProcessGatewayContext(method, resolveGatewayContext)
     : undefined;
   if (forceTransport || !hasInProcessGatewayContext(boundGateway?.resolve)) {
     if (readInProcessSubagentResume(request)) {
@@ -209,7 +220,7 @@ async function callAgentToolGatewayRequestBound<T>(
       throw new Error("trusted agent runtime identity requires in-process Gateway dispatch");
     }
     if (boundGateway && !forceTransport) {
-      throw new Error(`Gateway instance unavailable for ${request.method}`);
+      throw new Error(`Gateway instance unavailable for ${method}`);
     }
     const { callGateway } = await import("../../gateway/call.js");
     const {
@@ -219,13 +230,13 @@ async function callAgentToolGatewayRequestBound<T>(
     } = request;
     return await runBoundInProcessGatewayCall(
       boundGateway,
-      () => callGateway<T>(wireRequest),
+      () => callGateway<T>({ ...wireRequest, method }),
       assertCurrent,
       revalidateOnCompletion,
     );
   }
   const scopes =
-    request.scopes ?? resolveLeastPrivilegeOperatorScopesForMethod(request.method, request.params);
+    request.scopes ?? resolveLeastPrivilegeOperatorScopesForMethod(method, request.params);
   const timeoutMs =
     request.timeoutMs === null
       ? undefined
@@ -243,9 +254,9 @@ async function callAgentToolGatewayRequestBound<T>(
           onSignalAbort: () =>
             runWithGatewayToolCleanupContext(
               () =>
-                request.onSignalAbort?.((method, params, options) =>
+                request.onSignalAbort?.((cleanupMethod, params, options) =>
                   callAgentToolGatewayRequestBound(
-                    { method, params, ...options },
+                    { method: cleanupMethod, params, ...options },
                     boundGateway?.resolve ?? resolveGatewayContext,
                     undefined,
                     undefined,
@@ -255,8 +266,8 @@ async function callAgentToolGatewayRequestBound<T>(
             ),
         }
       : {}),
-    // Submitted writes settle; their original signal still fences every handoff above.
-    ...(request.signal && revalidateOnCompletion ? { signal: request.signal } : {}),
+    // A commit receipt owns settlement; cancellation still fences dispatch, commit, and uncommitted results.
+    ...(request.signal && revalidateOnCompletion && !completion ? { signal: request.signal } : {}),
     ...(timeoutMs !== undefined ? { timeoutMs } : {}),
     ...(boundGateway ? { resolveGatewayContext: boundGateway.resolve } : {}),
     ...(assertCurrent ? { sessionMutationCommitGuard: assertCurrent } : {}),
@@ -265,7 +276,7 @@ async function callAgentToolGatewayRequestBound<T>(
     boundGateway,
     async () =>
       await dispatchGatewayMethodInProcess<T>(
-        request.method,
+        method,
         (request.params ?? {}) as Record<string, unknown>,
         bindInProcessSubagentResume(
           withInProcessAgentRuntimeIdentity(dispatchOptions, runtimeIdentity),
@@ -274,6 +285,7 @@ async function callAgentToolGatewayRequestBound<T>(
       ),
     assertCurrent,
     revalidateOnCompletion,
+    completion,
   );
 }
 

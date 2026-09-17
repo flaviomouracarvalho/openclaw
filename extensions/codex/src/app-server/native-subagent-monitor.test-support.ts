@@ -1,4 +1,6 @@
 import type {
+  deliverAgentHarnessTaskCompletion,
+  AgentHarnessCompletionDelivery,
   AgentHarnessScopedSetDeliveryStatusParams,
   AgentHarnessTaskRecord,
   AgentHarnessTaskRuntime,
@@ -6,7 +8,10 @@ import type {
 } from "openclaw/plugin-sdk/agent-harness-task-runtime";
 import { onTestFinished, vi } from "vitest";
 import { createFakeCodexAppServerClient } from "./codex-app-server.test-fixtures.js";
-import { createCodexNativeSubagentHistoryOwner } from "./native-subagent-history-owner.js";
+import {
+  createCodexNativeSubagentHistoryOwner,
+  type CodexNativeSubagentHistoryOwner,
+} from "./native-subagent-history-owner.js";
 import { codexNativeSubagentMonitorRuntime } from "./native-subagent-monitor.js";
 import type {
   CodexAppServerRequestResult,
@@ -14,7 +19,6 @@ import type {
   JsonObject,
   JsonValue,
 } from "./protocol.js";
-// Codex tests cover native subagent monitor plugin behavior.
 
 export type CodexThreadReadResponse = CodexAppServerRequestResult<"thread/read">;
 type DirectSpawnVersion = "v1" | "v2";
@@ -40,6 +44,26 @@ export function directSpawnItem(
       };
 }
 
+export function successfulSendInputOutput(params: {
+  callId: string;
+  submissionId: string;
+  parentThreadId?: string;
+  turnId?: string;
+}): CodexServerNotification {
+  return {
+    method: "rawResponseItem/completed",
+    params: {
+      threadId: params.parentThreadId ?? "parent-thread",
+      turnId: params.turnId ?? "parent-turn",
+      item: {
+        type: "function_call_output",
+        call_id: params.callId,
+        output: JSON.stringify({ submission_id: params.submissionId }),
+      },
+    },
+  };
+}
+
 export const CodexNativeSubagentMonitor = codexNativeSubagentMonitorRuntime.Monitor;
 export const registerCodexNativeSubagentMonitor = codexNativeSubagentMonitorRuntime.register;
 type CodexNativeSubagentMonitorInstance = InstanceType<typeof CodexNativeSubagentMonitor>;
@@ -54,7 +78,14 @@ export function createClient() {
     | ((params: ThreadReadParams) => CodexThreadReadResponse | Promise<CodexThreadReadResponse>)
   >();
   const threadTurns = new Map<string, JsonValue | Error>();
+  let loadedThreads: readonly string[] | undefined;
   const fixture = createFakeCodexAppServerClient(async (method: string, params?: unknown) => {
+    if (method === "thread/loaded/list") {
+      if (!loadedThreads) {
+        throw new Error("loaded threads not configured");
+      }
+      return { data: [...loadedThreads], nextCursor: null };
+    }
     if (method === "thread/turns/list") {
       const childThreadId = ((params as ThreadTurnsParams | undefined) ?? {}).threadId ?? "";
       const response = threadTurns.get(childThreadId);
@@ -85,7 +116,11 @@ export function createClient() {
     await Promise.resolve();
   });
   return {
+    client: fixture.client,
     request: fixture.request,
+    setLoadedThreads(threadIds: readonly string[]) {
+      loadedThreads = [...threadIds];
+    },
     setThreadRead(childThreadId: string, response: CodexThreadReadResponse | Error) {
       threadReads.set(childThreadId, response);
     },
@@ -110,13 +145,6 @@ export function createClient() {
 }
 
 export function createRuntime() {
-  type DeliveryResult = {
-    delivered: boolean;
-    path: "direct" | "steered" | "none";
-    error?: string;
-    recoveryPending?: true;
-    recoveryBlocked?: true;
-  };
   const createRunningTaskRun = vi.fn((params): AgentHarnessTaskRecord => ({
     taskId: params.sourceId ?? params.runId,
     runtime: "subagent",
@@ -167,25 +195,64 @@ export function createRuntime() {
   return {
     ...taskRuntime,
     createAgentHarnessTaskRuntime: vi.fn(() => taskRuntime),
-    deliverAgentHarnessTaskCompletion: vi.fn(async (): Promise<DeliveryResult> => ({
-      delivered: true,
-      path: "direct",
-    })),
+    deliverAgentHarnessTaskCompletion: vi.fn(
+      async (
+        _params: Parameters<typeof deliverAgentHarnessTaskCompletion>[0],
+      ): Promise<AgentHarnessCompletionDelivery> => ({
+        delivered: true,
+        path: "direct",
+      }),
+    ),
   };
+}
+
+export function createRecordedRuntime(
+  records: Map<string, AgentHarnessTaskRecord>,
+  requesterSessionKey = "agent:main:discord:channel:C123",
+) {
+  const runtime = createRuntime();
+  runtime.listTaskRecords.mockImplementation(() =>
+    [...records.values()].toReversed().toSorted((left, right) => right.createdAt - left.createdAt),
+  );
+  runtime.createRunningTaskRun.mockImplementation((params) => {
+    const existing = records.get(params.runId);
+    const task = {
+      ...(existing ?? taskRecord({ childThreadId: "child-thread", requesterSessionKey })),
+      ...params,
+      taskId: existing?.taskId ?? params.runId,
+    };
+    records.set(params.runId, task);
+    return task;
+  });
+  runtime.finalizeTaskRunByRunId.mockImplementation((params) => {
+    const task = records.get(params.runId);
+    if (!task) {
+      return [];
+    }
+    Object.assign(task, params);
+    return [task];
+  });
+  runtime.setDetachedTaskDeliveryStatusByRunId.mockImplementation((params) => {
+    const task = records.get(params.runId);
+    if (!task) {
+      return [];
+    }
+    Object.assign(task, params);
+    return [task];
+  });
+  return runtime;
 }
 
 export function createTaskScope(requesterSessionKey = "agent:main:discord:channel:C123") {
   return { requesterSessionKey } as AgentHarnessTaskRuntimeScope;
 }
 
-function nativeHistoryOwner(parentThreadId = "parent-thread") {
+export function nativeHistoryOwner(parentThreadId = "parent-thread") {
   const owner = createCodexNativeSubagentHistoryOwner({
     parentThreadId,
     sessionId: "physical-1",
     lifecycleRevision: "revision-1",
     binding: {
-      threadId: parentThreadId,
-      cwd: "/workspace",
       appServerRuntimeFingerprint: "connection-A",
     },
   });
@@ -199,13 +266,14 @@ export function registerParent(
   monitor: CodexNativeSubagentMonitorInstance,
   parentThreadId = "parent-thread",
   requesterSessionKey = "agent:main:discord:channel:C123",
+  historyOwner?: CodexNativeSubagentHistoryOwner,
 ) {
   return monitor.registerParent({
     parentThreadId,
     requesterSessionKey,
     taskRuntimeScope: createTaskScope(requesterSessionKey),
     agentId: "main",
-    historyOwner: nativeHistoryOwner(parentThreadId),
+    ...(historyOwner ? { historyOwner } : {}),
   });
 }
 
@@ -245,7 +313,7 @@ export async function registerDetachedChild(
 ): Promise<void> {
   const owner = registerParent(monitor);
   await notifyChildStarted(client);
-  owner.unregister();
+  await owner.unregister();
 }
 
 export function nativeCompletionNotification(
@@ -290,21 +358,48 @@ export function nativeCompletionNotification(
   };
 }
 
+export function deliveredNativeCompletion() {
+  return {
+    method: "rawResponseItem/completed",
+    params: {
+      threadId: "parent-thread",
+      turnId: "parent-turn",
+      item: {
+        type: "agent_message",
+        author: "/root/worker",
+        recipient: "/root",
+        content: [
+          {
+            type: "input_text",
+            text: "Message Type: FINAL_ANSWER\nTask name: /root\nSender: /root/worker\nPayload:\nThe build passed.",
+          },
+        ],
+      },
+    },
+  } satisfies CodexServerNotification;
+}
+
 export function closeAgentNotification(params: {
   method: "item/started" | "item/completed";
+  parentThreadId?: string;
+  turnId?: string;
+  itemId?: string;
   childThreadId?: string;
   previousStatus?: "completed" | "running";
 }): CodexServerNotification {
+  const parentThreadId = params.parentThreadId ?? "parent-thread";
   const childThreadId = params.childThreadId ?? "child-thread";
   return {
     method: params.method,
     params: {
-      threadId: "parent-thread",
+      threadId: parentThreadId,
+      turnId: params.turnId ?? "parent-turn",
       item: {
+        id: params.itemId ?? `close-${childThreadId}`,
         type: "collabAgentToolCall",
         tool: "closeAgent",
         status: params.method === "item/started" ? "inProgress" : "completed",
-        senderThreadId: "parent-thread",
+        senderThreadId: parentThreadId,
         receiverThreadIds: [childThreadId],
         agentsStates:
           params.method === "item/completed"
@@ -338,6 +433,7 @@ export function childTurnCompletedNotification(params: {
 export function threadRead(
   params: {
     childThreadId?: string;
+    turnId?: string;
     parentThreadId?: string;
     agentPath?: string;
     status?: "completed" | "failed" | "interrupted" | "inProgress";
@@ -404,7 +500,7 @@ export function threadRead(
             ]
           : []),
         {
-          id: "turn-1",
+          id: params.turnId ?? "turn-1",
           status,
           items,
           error: params.error ? { message: params.error } : null,
@@ -417,7 +513,7 @@ export function threadRead(
 
 export function taskRecord(params: {
   childThreadId: string;
-  parentThreadId?: string;
+  historyOwner?: CodexNativeSubagentHistoryOwner;
   requesterSessionKey?: string;
   status?: AgentHarnessTaskRecord["status"];
   deliveryStatus?: AgentHarnessTaskRecord["deliveryStatus"];
@@ -438,6 +534,6 @@ export function taskRecord(params: {
     notifyPolicy: "silent",
     createdAt: Date.now(),
     endedAt: params.endedAt,
-    detail: { nativeHistory: nativeHistoryOwner(params.parentThreadId) },
+    ...(params.historyOwner ? { detail: { nativeHistory: params.historyOwner } } : {}),
   };
 }

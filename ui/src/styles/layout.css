@@ -2399,15 +2399,11 @@ openclaw-settings-save-indicator:empty {
   flex: 0 0 auto;
   min-width: 0;
   overflow: hidden;
-  text-overflow: ellipsis;
+  text-overflow: clip;
   white-space: nowrap;
   font-size: calc(13px * var(--control-ui-text-scale));
   font-weight: 500;
   color: var(--text);
-}
-
-.sidebar-recent-session__name.hover-marquee--scrolling {
-  transition-duration: calc(var(--hover-marquee-duration, 600ms) * 2);
 }
 
 .sidebar-recent-sessions

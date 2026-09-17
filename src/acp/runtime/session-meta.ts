@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 /** SQLite-backed ACP session metadata storage keyed through session-store entries. */
 import type { DatabaseSync } from "node:sqlite";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
@@ -480,6 +481,7 @@ export async function upsertAcpSessionMeta(params: {
   const updatedAt = params.now?.() ?? Date.now();
   runOpenClawStateWriteTransaction(
     (database) => {
+      params.assertCommitAllowed?.();
       const currentRow = selectAcpSessionRowForStoreEntry(
         database.db,
         storageSessionKey,
@@ -489,7 +491,10 @@ export async function upsertAcpSessionMeta(params: {
       );
       currentRowKey = currentRow?.session_key;
       current = currentRow ? rowToAcpSessionMeta(currentRow) : undefined;
-      preparedEntry = mergeSessionEntry(entry, { updatedAt });
+      preparedEntry = mergeSessionEntry(entry, {
+        updatedAt,
+        ...(entry ? {} : { lifecycleRevision: randomUUID() }),
+      });
       nextMeta = params.mutate(
         current,
         current ? mergeAcpForReturn(preparedEntry, current) : entry,
@@ -561,6 +566,7 @@ export async function upsertAcpSessionMeta(params: {
       agentId: storeEntry.agentId,
       storePath: storeEntry.storePath,
       sessionKeys: [storageSessionKey, patched?.sessionKey],
+      assertCommitAllowed: params.assertCommitAllowed,
     });
     return patched?.entry ?? null;
   }
@@ -591,6 +597,7 @@ export async function upsertAcpSessionMeta(params: {
     agentId: storeEntry.agentId,
     storePath: storeEntry.storePath,
     sessionKeys: [storageSessionKey, persisted.sessionKey],
+    assertCommitAllowed: params.assertCommitAllowed,
   });
   runOpenClawStateWriteTransaction(
     (database) => {

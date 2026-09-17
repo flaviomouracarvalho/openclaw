@@ -11,6 +11,12 @@ import {
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { DEFAULT_CRON_MAX_CONCURRENT_RUNS } from "../../config/cron-limits.js";
 import {
+  captureGatewayDeviceRevocation,
+  closeGatewayDeviceRevocation,
+} from "../../gateway/device-revocation.js";
+import { resolveCronMutationCommitGuard } from "../../gateway/server-methods/cron-caller-scope.js";
+import type { GatewayRequestContext } from "../../gateway/server-methods/types.js";
+import {
   clearCommandLane,
   enqueueCommandInLane,
   getTotalQueueSize,
@@ -27,6 +33,7 @@ import { CommandLane } from "../../process/lanes.js";
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import { mockCall } from "../../test-utils/mock-call-assertions.js";
 import { isCronJobActive } from "../active-jobs.js";
+import { createCronMutationCompletion } from "../mutation-completion.js";
 import { loadCronStore, saveCronStore } from "../store.js";
 import { cronStoreKey } from "../store/key.js";
 import { readCronTaskRunHistoryPage } from "../task-run-history.js";
@@ -154,17 +161,35 @@ describe("cron service ops regressions", () => {
       runIsolatedAgentJob,
       onEvent,
     });
+    const context = {} as GatewayRequestContext;
+    const caller = captureGatewayDeviceRevocation(
+      context,
+      { deviceId: "closed-admission-device", role: "operator" },
+      () => true,
+    );
+    const commitGuard = resolveCronMutationCommitGuard(null, context, undefined, {
+      hasCurrentClientAuthority: caller.isCurrent,
+    });
+    const completion = createCronMutationCompletion("cron.run");
+    if (!completion) {
+      throw new Error("Expected Cron completion owner");
+    }
 
     try {
       markGatewayRestartDraining();
-      await expect(enqueueRun(state, job.id, "force")).rejects.toThrow(
-        "gateway is draining for restart",
-      );
+      await expect(
+        completion.run(() => enqueueRun(state, job.id, "force", { commitGuard })),
+      ).rejects.toThrow("gateway is draining for restart");
+      expect(completion.isCommitted()).toBe(false);
       expect(getTotalQueueSize()).toBe(0);
       expect(getActiveGatewayRootWorkCount()).toBe(0);
       expect(onEvent).not.toHaveBeenCalled();
       expect(runIsolatedAgentJob).not.toHaveBeenCalled();
+      caller.release();
+      expect(caller.isCurrent()).toBe(false);
     } finally {
+      caller.release();
+      closeGatewayDeviceRevocation(context);
       resetGatewayWorkAdmission();
     }
   });

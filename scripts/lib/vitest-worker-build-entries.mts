@@ -1,4 +1,3 @@
-import { fileURLToPath } from "node:url";
 import { logbookSqliteBackendEntrypoint } from "../../extensions/logbook/src/sqlite-backend-entrypoint.test-support.ts";
 import { memoryPublicationFaultEntrypoint } from "../../extensions/memory-core/src/memory/manager-publication-fault-entrypoint.test-support.ts";
 import { qaGatewayCleanupRuntimeEntrypoint } from "../../extensions/qa-lab/src/gateway-child-artifacts-runtime.test-support.ts";
@@ -9,6 +8,7 @@ import {
   codeModeRetentionEntrypoint,
 } from "../../src/agents/code-mode-retention-entrypoint.test-support.ts";
 import { cliCompactionBackendEntrypoints } from "../../src/agents/command/cli-compaction-runtime.test-support.ts";
+import { bashOutputSpillEntrypoints } from "../../src/agents/sessions/bash-output-spill-entrypoints.test-support.ts";
 import {
   cliRecoveryEntrypoints,
   gatewayDirectStopEntrypoints,
@@ -28,6 +28,7 @@ import {
   mcpProviderCatalogEntrypoint,
   publishedSdkBridgeEntrypoints,
 } from "../../src/plugins/loader-sdk-bridge-artifacts.test-support.ts";
+import { pluginRuntimeRetentionEntrypoint } from "../../src/plugins/runtime-retention-entrypoint.test-support.ts";
 import { persistenceRuntimeEntrypoint } from "../../src/skills/library/persistence-runtime.test-support.ts";
 import { agentDatabaseModuleIdentityEntrypoints } from "../../src/state/openclaw-agent-db-module-identity-runtime.test-support.ts";
 import { agentWorkerStoreFixtureEntrypoint } from "../../src/state/openclaw-agent-worker-store.runtime.test-support.ts";
@@ -38,7 +39,8 @@ import {
 import { groqSetupSdkEntrypoints } from "../../src/system-agent/setup-inference-groq-sdk.test-support.ts";
 import { tuiPtyRuntimeEntrypoints } from "../../src/tui/tui-pty-runtime-test-support.ts";
 import { channelIngressGatewayRestartEntrypoint } from "../../test/fixtures/channel-ingress-gateway-restart-entrypoint.ts";
-import { runtimeProcessBuildEntries } from "./runtime-process-build-entries.mts";
+import { runtimeProcessBuildEntrypoints } from "./runtime-process-build-entries.mts";
+import { createRuntimeProcessBuildEntries } from "./runtime-process-core-build-entries.mts";
 
 // These fixture hooks require physical module boundaries and complete namespaces.
 export const legacyFinalizerBuildSources = [
@@ -58,45 +60,42 @@ export const legacyFinalizerBuildSources = [
 
 // Test-only roots share the invocation generation without changing package entries.
 export const vitestWorkerBuildEntries = {
-  ...runtimeProcessBuildEntries,
   "legacy-config-binding-repair.runtime":
     "src/commands/doctor/shared/legacy-config-binding-repair.runtime.ts",
-  ...Object.fromEntries(
-    [
-      agentWorkerStoreFixtureEntrypoint,
-      memoryPublicationFaultEntrypoint,
-      ...Object.values(triageTestRuntimeEntrypoints),
-      ...Object.values(triageMaintenanceRuntimeEntrypoints),
-      codeModeRetentionEntrypoint,
-      codeModeDescriptionRetentionEntrypoint,
-      ...cliCompactionBackendEntrypoints,
-      ...publishedSdkBridgeEntrypoints,
-      mcpProviderCatalogEntrypoint,
-      ...groqSetupSdkEntrypoints,
-      ...Object.values(cliRecoveryEntrypoints),
-      ...Object.values(updateExecutorNativeEntrypoints),
-      ...Object.values(gatewayDirectStopEntrypoints),
-      stateDirGatewayFixtureEntrypoint,
-      ...Object.values(doctorConfigRuntimeEntrypoints),
-      ...Object.values(cronOwnerHardeningEntrypoints),
-      ...Object.values(tuiPtyRuntimeEntrypoints),
-      ...Object.values(sessionTitleRetentionEntrypoints),
-      sessionChildCacheRetentionEntrypoint,
-      nodeHostConfigRuntimeEntrypoint,
-      channelIngressGatewayRestartEntrypoint,
-      persistenceRuntimeEntrypoint,
-      qaGatewayCleanupRuntimeEntrypoint,
-      logbookSqliteBackendEntrypoint,
-      teamReportsSqliteBackendEntrypoint,
-      workboardSqliteBackendEntrypoint,
-      ...Object.values(agentDatabaseModuleIdentityEntrypoints),
-      stateLeaseProcessExitRuntimeEntrypoint,
-      agentDatabaseHeldRuntimeEntrypoint,
-    ].map((entry) => [
-      entry.distWorkerPath.replace(/\.js$/u, ""),
-      fileURLToPath(new URL(`./${entry.sourceWorkerName}.ts`, entry.currentModuleUrl)),
-    ]),
-  ),
+  ...createRuntimeProcessBuildEntries([
+    ...runtimeProcessBuildEntrypoints,
+    agentWorkerStoreFixtureEntrypoint,
+    memoryPublicationFaultEntrypoint,
+    ...Object.values(triageTestRuntimeEntrypoints),
+    ...Object.values(triageMaintenanceRuntimeEntrypoints),
+    codeModeRetentionEntrypoint,
+    codeModeDescriptionRetentionEntrypoint,
+    ...cliCompactionBackendEntrypoints,
+    ...Object.values(bashOutputSpillEntrypoints),
+    ...publishedSdkBridgeEntrypoints,
+    mcpProviderCatalogEntrypoint,
+    pluginRuntimeRetentionEntrypoint,
+    ...groqSetupSdkEntrypoints,
+    ...Object.values(cliRecoveryEntrypoints),
+    ...Object.values(updateExecutorNativeEntrypoints),
+    ...Object.values(gatewayDirectStopEntrypoints),
+    stateDirGatewayFixtureEntrypoint,
+    ...Object.values(doctorConfigRuntimeEntrypoints),
+    ...Object.values(cronOwnerHardeningEntrypoints),
+    ...Object.values(tuiPtyRuntimeEntrypoints),
+    ...Object.values(sessionTitleRetentionEntrypoints),
+    sessionChildCacheRetentionEntrypoint,
+    nodeHostConfigRuntimeEntrypoint,
+    channelIngressGatewayRestartEntrypoint,
+    persistenceRuntimeEntrypoint,
+    qaGatewayCleanupRuntimeEntrypoint,
+    logbookSqliteBackendEntrypoint,
+    teamReportsSqliteBackendEntrypoint,
+    workboardSqliteBackendEntrypoint,
+    ...Object.values(agentDatabaseModuleIdentityEntrypoints),
+    stateLeaseProcessExitRuntimeEntrypoint,
+    agentDatabaseHeldRuntimeEntrypoint,
+  ]),
   // The retention fixture executes the real nested QuickJS worker.
   "agents/code-mode.worker": "src/agents/code-mode.worker.ts",
   // The real ulimit fixture must import its parent before imposing a file-size limit.

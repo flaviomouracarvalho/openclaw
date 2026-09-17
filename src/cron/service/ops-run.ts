@@ -1,9 +1,11 @@
+import { retainGatewayDeviceRevocation } from "../../gateway/device-revocation.js";
 import { createAbortError, isAbortError } from "../../infra/abort-signal.js";
 import { enqueueCommandInLane } from "../../process/command-queue.js";
 import { runWithGatewayIndependentRootWorkContinuation } from "../../process/gateway-work-admission.js";
 import { CommandLane } from "../../process/lanes.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { isCronActiveJobMarkerCurrent } from "../active-jobs.js";
+import { captureCronMutationCommit } from "../mutation-completion.js";
 import {
   CronRunReceiptRevisionError,
   finishCronRunReceipt,
@@ -489,98 +491,109 @@ export async function enqueueRun(
   const scheduleOwnershipAtMs = state.deps.nowMs();
   const runId = `manual:${id}:${scheduleOwnershipAtMs}:${nextManualRunId++}`;
   const terminalTracker: ManualRunTerminalTracker = { emitted: false };
+  const releaseCallerAuthority = retainGatewayDeviceRevocation(opts?.commitGuard);
+  const recordQueueAcceptance = captureCronMutationCommit("cron.run");
   const acceptance = createDeferredCore();
   let accepted = false;
   const acceptQueue = () => {
+    recordQueueAcceptance?.();
     accepted = true;
     acceptance.resolve();
   };
-  const queuedRun = runWithGatewayIndependentRootWorkContinuation(() => {
-    opts?.commitGuard?.();
-    return enqueueCommandInLane(
-      CommandLane.Cron,
-      async (owningCronLaneTaskMarker) => {
-        acceptQueue();
-        const result = await run(state, id, mode, {
-          runId,
-          scheduleOwnershipAtMs,
-          terminalTracker,
-          owningCronLaneTaskMarker,
-          ...(opts?.commitGuard ? { commitGuard: opts.commitGuard } : {}),
-        });
-        if (result.ok && "ran" in result && !result.ran) {
-          if (result.reason !== "invalid-spec" && result.reason !== "ownerless") {
-            const finishedAt = state.deps.nowMs();
-            const job = state.store?.jobs.find((entry) => entry.id === id);
-            emitCronRunFinished(
-              state,
-              {
-                jobId: id,
-                action: "finished",
-                job,
-                status: "skipped",
-                error: `queued manual run skipped before execution: ${result.reason}`,
-                runId,
-                runAtMs: finishedAt,
-                durationMs: 0,
-                nextRunAtMs: job?.state.nextRunAtMs,
-              },
-              terminalTracker,
+  let queuedRun: Promise<unknown>;
+  try {
+    queuedRun = runWithGatewayIndependentRootWorkContinuation(() => {
+      opts?.commitGuard?.();
+      return enqueueCommandInLane(
+        CommandLane.Cron,
+        async (owningCronLaneTaskMarker) => {
+          acceptQueue();
+          const result = await run(state, id, mode, {
+            runId,
+            scheduleOwnershipAtMs,
+            terminalTracker,
+            owningCronLaneTaskMarker,
+            ...(opts?.commitGuard ? { commitGuard: opts.commitGuard } : {}),
+          });
+          if (result.ok && "ran" in result && !result.ran) {
+            if (result.reason !== "invalid-spec" && result.reason !== "ownerless") {
+              const finishedAt = state.deps.nowMs();
+              const job = state.store?.jobs.find((entry) => entry.id === id);
+              emitCronRunFinished(
+                state,
+                {
+                  jobId: id,
+                  action: "finished",
+                  job,
+                  status: "skipped",
+                  error: `queued manual run skipped before execution: ${result.reason}`,
+                  runId,
+                  runAtMs: finishedAt,
+                  durationMs: 0,
+                  nextRunAtMs: job?.state.nextRunAtMs,
+                },
+                terminalTracker,
+              );
+            }
+            state.deps.log.info(
+              { jobId: id, runId, reason: result.reason },
+              "cron: queued manual run skipped before execution",
             );
           }
-          state.deps.log.info(
-            { jobId: id, runId, reason: result.reason },
-            "cron: queued manual run skipped before execution",
-          );
-        }
-        return result;
-      },
-      {
-        onQueued: acceptQueue,
-        warnAfterMs: 5_000,
-        onWait: (waitMs, queuedAhead) => {
-          state.deps.log.warn(
-            { jobId: id, runId, waitMs, queuedAhead },
-            "cron: queued manual run waiting for an execution slot",
-          );
+          return result;
         },
-      },
-    );
-  }, "cron:manual-run");
-  void queuedRun.catch((err: unknown) => {
-    if (!accepted) {
-      acceptance.reject(err);
-      return;
-    }
-    if (terminalTracker.emitted) {
+        {
+          onQueued: acceptQueue,
+          warnAfterMs: 5_000,
+          onWait: (waitMs, queuedAhead) => {
+            state.deps.log.warn(
+              { jobId: id, runId, waitMs, queuedAhead },
+              "cron: queued manual run waiting for an execution slot",
+            );
+          },
+        },
+      );
+    }, "cron:manual-run");
+  } catch (error) {
+    releaseCallerAuthority?.();
+    throw error;
+  }
+  void queuedRun
+    .catch((err: unknown) => {
+      if (!accepted) {
+        acceptance.reject(err);
+        return;
+      }
+      if (terminalTracker.emitted) {
+        state.deps.log.error(
+          { jobId: id, runId, err: String(err) },
+          "cron: queued manual run failed after emitting its terminal event",
+        );
+        return;
+      }
+      const finishedAt = state.deps.nowMs();
+      const job = state.store?.jobs.find((entry) => entry.id === id);
+      emitCronRunFinished(
+        state,
+        {
+          jobId: id,
+          action: "finished",
+          job,
+          status: "error",
+          error: normalizeCronRunErrorText(err),
+          runId,
+          runAtMs: finishedAt,
+          durationMs: 0,
+          nextRunAtMs: job?.state.nextRunAtMs,
+        },
+        terminalTracker,
+      );
       state.deps.log.error(
         { jobId: id, runId, err: String(err) },
-        "cron: queued manual run failed after emitting its terminal event",
+        "cron: queued manual run background execution failed",
       );
-      return;
-    }
-    const finishedAt = state.deps.nowMs();
-    const job = state.store?.jobs.find((entry) => entry.id === id);
-    emitCronRunFinished(
-      state,
-      {
-        jobId: id,
-        action: "finished",
-        job,
-        status: "error",
-        error: normalizeCronRunErrorText(err),
-        runId,
-        runAtMs: finishedAt,
-        durationMs: 0,
-        nextRunAtMs: job?.state.nextRunAtMs,
-      },
-      terminalTracker,
-    );
-    state.deps.log.error(
-      { jobId: id, runId, err: String(err) },
-      "cron: queued manual run background execution failed",
-    );
-  });
+    })
+    .finally(() => releaseCallerAuthority?.());
   await acceptance.promise;
   return { ok: true, enqueued: true, runId } as const;
 }
