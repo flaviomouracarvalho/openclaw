@@ -91,7 +91,7 @@ database, workspace-state, and exec-approval readiness checks. A successful
 update does not mean the omitted diagnostics passed.
 
 This maintenance window also applies when repair ultimately finds no changes.
-Runs without `--fix`, `--repair`, or `--yes` do not enter maintenance.
+Runs without `--fix`, `--repair`, or `--yes` do not enter service repair maintenance.
 Custom state directories remain runtime-only and do not adopt a native service.
 
 `--force` alone does not select repair mode: `openclaw doctor --force` remains
@@ -135,6 +135,34 @@ Doctor does not quarantine unsupported workspace state, discard future-version
 rows, or infer execution policy. Repeating the same repair invocation cannot
 resolve these conditions. After manual recovery, verify readiness before starting
 the service through its owner.
+
+## Legacy plugin capture cleanup
+
+Older versions left `openclaw-plugin-build-*` directories in the system temporary
+directory. After stopping **all Gateways, CLI processes, and workers sharing that
+temporary directory**, remove legacy captures last modified more than 24 hours ago:
+
+```bash
+openclaw doctor --cleanup-legacy-plugin-captures
+openclaw doctor --cleanup-legacy-plugin-captures --json
+```
+
+The flag explicitly confirms that those processes are stopped, including processes
+in other profiles, users, containers, or sandboxes sharing the directory. Keep them
+stopped until the command finishes. Capture age does not prove a process has stopped,
+and legacy directory names do not identify their owning state directory.
+
+Doctor holds the current state directory's Gateway maintenance owner during cleanup
+and refuses if another process holds that owner. This guard cannot verify every
+process sharing the temporary directory. The command does not stop or restart a
+Gateway, and accepts only `--json` alongside the cleanup flag.
+
+Cleanup preserves captures 24 hours old or newer, symbolic links, regular files,
+and unrelated directories. It reports removal and preservation counts (`--json`
+includes paths), reports retained paths when deletion fails, and exits with code 1
+for those failures. Ordinary Doctor, `--fix`, updater finalization, and Gateway
+startup do not remove legacy tmp captures. See [Plugin architecture](/plugins/architecture)
+for current capture ownership.
 
 ## Examples
 
@@ -198,4 +226,6 @@ openclaw channels status --probe
 | `--skip <id>`                   | With `--lint`: skip a check id. Repeatable.                                                                                                                                                                 |
 | `--only <id>`                   | With `--lint`: run only the given check id(s). Repeatable.                                                                                                                                                  |
 
-`--severity-min`, `--all`, `--only`, and `--skip` are only accepted together with `--lint`. Bare `--json` uses the default read-only lint check selection but keeps Doctor's advisory exit behavior. Both read-only postures reject `--repair`, `--fix`, `--force`, `--yes`, and `--generate-gateway-token`. Explicit `--lint` also rejects `--session-sqlite` modes and their selectors, including `--github-issue`. Other machine modes can still use `--json` for their own output.
+`--cleanup-legacy-plugin-captures` selects [offline legacy capture cleanup](/cli/doctor/running#legacy-plugin-capture-cleanup). The flag confirms all producers sharing the temporary directory are stopped and accepts only `--json` alongside it.
+
+`--severity-min`, `--all`, `--only`, and `--skip` are only accepted together with `--lint`. Bare `--json` uses the default read-only lint check selection but keeps Doctor's advisory exit behavior. Both read-only postures reject `--repair`, `--fix`, `--force`, `--yes`, and `--generate-gateway-token`. Explicit `--lint` also rejects `--session-sqlite` modes and their selectors, including `--github-issue`, and `--cleanup-legacy-plugin-captures`. Other machine modes can still use `--json` for their own output.

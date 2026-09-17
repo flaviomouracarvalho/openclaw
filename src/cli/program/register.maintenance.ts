@@ -11,7 +11,7 @@ import { formatCliJsonFailure } from "../failure-output.js";
 import { exitCliAfterOutput } from "../one-shot-exit.js";
 import { setCommandJsonMode } from "./json-mode.js";
 
-const STATE_SQLITE_CONFLICTING_OPTION_NAMES = [
+const DOCTOR_FLOW_OPTION_NAMES = [
   "workspaceSuggestions",
   "yes",
   "repair",
@@ -81,6 +81,11 @@ export function registerMaintenanceCommands(program: Command) {
       "Run session SQLite migration mode (dry-run|import|validate|inspect|compact|restore|recover)",
     )
     .option("--state-sqlite <mode>", "Run shared state SQLite maintenance mode (compact)")
+    .option(
+      "--cleanup-legacy-plugin-captures",
+      "Remove legacy tmp plugin captures older than 24h; confirms all Gateways, CLI processes, and workers sharing tmp are stopped",
+      false,
+    )
     .option("--session-sqlite-store <path>", "With --session-sqlite: inspect one session store")
     .option("--session-sqlite-agent <id>", "With --session-sqlite: inspect one agent")
     .option(
@@ -114,10 +119,19 @@ export function registerMaintenanceCommands(program: Command) {
     .action(async (opts, command) => {
       if (
         typeof opts.stateSqlite === "string" &&
-        hasExplicitOptions(command, STATE_SQLITE_CONFLICTING_OPTION_NAMES)
+        hasExplicitOptions(command, [...DOCTOR_FLOW_OPTION_NAMES, "cleanupLegacyPluginCaptures"])
       ) {
         return exitDoctorError(
           "doctor shared-state SQLite maintenance can only be combined with --json.",
+          opts.json === true,
+        );
+      }
+      if (
+        opts.cleanupLegacyPluginCaptures === true &&
+        hasExplicitOptions(command, [...DOCTOR_FLOW_OPTION_NAMES, "stateSqlite"])
+      ) {
+        return exitDoctorError(
+          "doctor legacy plugin capture cleanup can only be combined with --json.",
           opts.json === true,
         );
       }
@@ -131,6 +145,7 @@ export function registerMaintenanceCommands(program: Command) {
         opts.json === true &&
         opts.lint !== true &&
         opts.postUpgrade !== true &&
+        opts.cleanupLegacyPluginCaptures !== true &&
         typeof opts.stateSqlite !== "string" &&
         typeof opts.sessionSqlite !== "string";
       const unsupportedNode =
@@ -147,7 +162,9 @@ export function registerMaintenanceCommands(program: Command) {
               ? "--generate-gateway-token"
               : typeof opts.sessionSqlite === "string"
                 ? `--session-sqlite ${opts.sessionSqlite}`
-                : undefined;
+                : opts.cleanupLegacyPluginCaptures === true
+                  ? "--cleanup-legacy-plugin-captures"
+                  : undefined;
       if (lintMode && mutationOption) {
         return exitDoctorError(
           `doctor ${lintMode} runs read-only lint checks and cannot be combined with ${mutationOption}.`,
@@ -212,6 +229,9 @@ export function registerMaintenanceCommands(program: Command) {
             allowExec: Boolean(opts.allowExec),
             deep: Boolean(opts.deep),
             postUpgrade: Boolean(opts.postUpgrade),
+            ...(opts.cleanupLegacyPluginCaptures === true
+              ? { cleanupLegacyPluginCaptures: true }
+              : {}),
             ...(stateSqlite ? { stateSqlite } : {}),
             ...(sessionSqlite ? { sessionSqlite } : {}),
             ...(typeof opts.sessionSqliteStore === "string"

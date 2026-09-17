@@ -8,6 +8,7 @@ export function isDoctorMachineOutput(params: MachineOutputResolverParams): bool
     return hasMachineOutputOption(params.argv, "--json") || !params.stdoutIsTTY;
   }
   const existingMachineMode =
+    hasMachineOutputOption(params.argv, "--cleanup-legacy-plugin-captures") ||
     hasMachineOutputOption(params.argv, "--post-upgrade") ||
     hasMachineOutputOption(params.argv, "--state-sqlite") ||
     hasMachineOutputOption(params.argv, "--session-sqlite");

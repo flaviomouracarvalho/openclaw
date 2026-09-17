@@ -221,13 +221,38 @@ Runtime and setup retirement remove captured artifacts asynchronously and wait
 for removal to finish. Plugin callback deadlines do not end custody of those
 files; synchronous source inspection and failed capture still clean up before returning.
 
-Gateway startup and source acquisition also schedule one asynchronous cleanup pass
-per temporary root. New capture directories include their creator's process ID.
-Captures at least one hour old can be reclaimed when that process is known to
-have exited. Live or uncertain process owners, symlinks, and older directory names
-without a creator ID are preserved. A forced exit can therefore leave files until
-a later start after that grace period; existing captures from older versions are
-not automatically removed.
+Default source captures live under
+`<stateDir>/tmp/plugin-captures/<instanceId>/captures/`, with a random instance ID
+and an empty SQLite coordinator held for that instance's lifetime. Gateway
+metadata and its source captures retain the same process-local instance; a
+concurrent CLI process owns a separate instance. Releasing one capture cannot
+retire another capture or a still-running metadata owner.
+
+Startup and hourly cleanup inspect only this owned subtree. An instance becomes
+eligible after one hour, but age alone never authorizes removal: cleanup must
+also acquire its native coordinator, proving that no producer retains custody.
+Process exit releases the native lock even after a forced termination. PID
+names, process probes, and PID-reuse guesses are not used; a numeric PID cannot
+identify a producer across containers sharing a temporary directory. Contention,
+unreadable entries, symlinks, and incomplete instance creation preserve files.
+Removal remains asynchronous and advisory. This subtree is excluded from state
+backups because its captured package bytes are reconstructible.
+
+Metadata retention does not create directories until a source capture is needed.
+If the state directory cannot accept captures, loading falls back to an isolated
+system-temporary instance and reports a warning. Normal disposal still removes
+that instance; automatic cleanup does not scan unrelated system-temporary roots.
+There is no total disk quota, and an active instance may legitimately exceed the
+one-hour cleanup grace period.
+
+Older `openclaw-plugin-build-*` directories are never removed by startup or
+ordinary Doctor repair. After stopping **all Gateways, CLI processes, and workers
+sharing the temporary directory**, explicitly run
+`openclaw doctor --cleanup-legacy-plugin-captures` to remove matching directories
+older than 24 hours. The command also refuses active ownership of the selected
+state directory, but that guard cannot establish quiescence for other profiles
+or containers. The operator must ensure that global precondition. No legacy
+files are moved or adopted by the new runtime.
 
 Model-catalog workers keep their captured plugin files in a directory owned by
 one worker. The parent removes any remaining captures after that worker exits,

@@ -39,13 +39,15 @@ describe("built-in machine-output resolvers", () => {
     }
   });
 
-  it.each(["--post-upgrade", "--state-sqlite=compact", "--session-sqlite=dry-run"])(
-    "preserves registered-command JSON handling for doctor %s",
-    (mode) => {
-      const argv = ["node", "openclaw", "doctor", mode, "--json"];
-      expect(isDoctorMachineOutput({ argv, stdoutIsTTY: true })).toBe(false);
-    },
-  );
+  it.each([
+    "--post-upgrade",
+    "--state-sqlite=compact",
+    "--session-sqlite=dry-run",
+    "--cleanup-legacy-plugin-captures",
+  ])("preserves registered-command JSON handling for doctor %s", (mode) => {
+    const argv = ["node", "openclaw", "doctor", mode, "--json"];
+    expect(isDoctorMachineOutput({ argv, stdoutIsTTY: true })).toBe(false);
+  });
 
   it.each(["blob", "coverage", "purge", "query", "sessions"])(
     "detects proxy %s output",

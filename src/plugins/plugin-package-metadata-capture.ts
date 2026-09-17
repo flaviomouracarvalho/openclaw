@@ -3,14 +3,13 @@ import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs";
 import fsPromises from "node:fs/promises";
 import { createRequire, isBuiltin } from "node:module";
-import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { openRootFileSync } from "../infra/boundary-file-read.js";
 import { isPathInside } from "../infra/path-guards.js";
 import { escapeRegExp } from "../shared/regexp.js";
-import { createPluginSourceCaptureDirectory } from "./plugin-source-capture-directory.js";
+import { retainPluginSourceCaptureInstance } from "./plugin-source-capture-directory.js";
 
 export function createPluginSourceLinkCapture() {
   const links = new Set<string>();
@@ -652,9 +651,24 @@ export function withPluginSourceCaptureDirectory<T>(directory: string, run: () =
 
 /** Admissions and failed-input receipts belong to one source acquisition lifetime. */
 export function createPluginSourceCapture(execute?: <T>(run: () => T) => T) {
-  const directory = createPluginSourceCaptureDirectory(
-    sourceCaptureDirectory.getStore() ?? tmpdir(),
-  );
+  const override = sourceCaptureDirectory.getStore();
+  const instance = override === undefined ? retainPluginSourceCaptureInstance() : undefined;
+  let created: string | undefined;
+  let directory: string;
+  try {
+    created =
+      override !== undefined
+        ? fs.mkdtempSync(path.join(override, "openclaw-plugin-build-"))
+        : instance!.createDirectory();
+    directory = fs.realpathSync(created);
+    fs.chmodSync(directory, 0o700);
+  } catch (error) {
+    if (created) {
+      fs.rmSync(created, { recursive: true, force: true });
+    }
+    instance?.release();
+    throw error;
+  }
   const inputs = new Map<string, PluginSourceInput>();
   const pendingInputs = new Set<string>();
   const additions = new Set<string>();
@@ -717,10 +731,12 @@ export function createPluginSourceCapture(execute?: <T>(run: () => T) => T) {
     dispose() {
       beginDisposal();
       fs.rmSync(directory, { recursive: true, force: true });
+      instance?.release();
     },
     async disposeAsync() {
       beginDisposal();
       await fsPromises.rm(directory, { recursive: true, force: true });
+      await instance?.releaseAsync();
     },
   };
 }

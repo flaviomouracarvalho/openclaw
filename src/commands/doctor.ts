@@ -46,6 +46,22 @@ async function resolveExplicitSessionSqliteMaintenancePaths(
 /** Runs doctor or the post-upgrade probe submode using the provided runtime. */
 export async function doctorCommand(runtime?: RuntimeEnv, options?: DoctorOptions): Promise<void> {
   const outputRuntime = runtime ?? defaultRuntime;
+  if (options?.cleanupLegacyPluginCaptures) {
+    const { runDoctorLegacyPluginCaptureCleanup } =
+      await import("./doctor-plugin-source-captures.js");
+    const report = await runDoctorLegacyPluginCaptureCleanup();
+    if (options.json) {
+      writeRuntimeJson(outputRuntime, report);
+    } else {
+      outputRuntime.log(
+        `Legacy plugin captures: removed=${report.removed.length}, preserved=${report.preserved.length}, failed=${report.failures.length}; directory=${report.directory}`,
+      );
+      for (const failure of report.failures) {
+        outputRuntime.error(`${failure.path}: ${failure.message}`);
+      }
+    }
+    exitCliAfterOutput(outputRuntime, report.failures.length > 0 ? 1 : 0);
+  }
   if (options?.stateSqlite) {
     const { runDoctorStateSqliteCompact } = await import("./doctor-state-sqlite-compact.js");
     const report = await runDoctorStateSqliteCompact();

@@ -371,12 +371,15 @@ describe("shouldStartProxyForCli", () => {
     expect(shouldStartProxyForCli(["node", "openclaw", "mcp"])).toBe(false);
   });
 
-  it("skips managed proxy routing before shared-state SQLite maintenance", () => {
+  it("skips managed proxy routing before offline Doctor maintenance", () => {
     expect(
       shouldStartProxyForCli(["node", "openclaw", "doctor", "--state-sqlite", "compact", "--json"]),
     ).toBe(false);
     expect(
       shouldStartProxyForCli(["node", "openclaw", "doctor", "--state-sqlite=compact", "--json"]),
+    ).toBe(false);
+    expect(
+      shouldStartProxyForCli(["node", "openclaw", "doctor", "--cleanup-legacy-plugin-captures"]),
     ).toBe(false);
     expect(shouldStartProxyForCli(["node", "openclaw", "doctor", "--lint"])).toBe(true);
   });

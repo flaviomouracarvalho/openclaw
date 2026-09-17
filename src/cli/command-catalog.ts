@@ -1,5 +1,6 @@
 // Declarative CLI command catalog for startup policy and fast-path routing.
 import { hasFlag } from "./argv.js";
+import { resolveDoctorNetworkProxyPolicy } from "./doctor-startup-policy.js";
 
 export type CliCommandPluginLoadPolicy =
   | "never"
@@ -59,18 +60,6 @@ export type CliCommandCatalogEntry = {
     id: CliRoutedCommandId;
   };
 };
-
-function hasCliOption(argv: readonly string[], name: string): boolean {
-  for (const arg of argv.slice(2)) {
-    if (arg === "--") {
-      return false;
-    }
-    if (arg === name || arg.startsWith(`${name}=`)) {
-      return true;
-    }
-  }
-  return false;
-}
 
 // These commands own their state boundary; bootstrap must not observe or initialize it first.
 const PASSIVE_STARTUP_POLICY = {
@@ -458,9 +447,7 @@ export const cliCommandCatalog: readonly CliCommandCatalogEntry[] = [
     policy: {
       configGuard: "skip",
       loadPlugins: "never",
-      // Shared-state maintenance must acquire exclusive ownership before any
-      // config-health observation can open the canonical SQLite database.
-      networkProxy: ({ argv }) => (hasCliOption(argv, "--state-sqlite") ? "bypass" : "default"),
+      networkProxy: resolveDoctorNetworkProxyPolicy,
     },
   },
   {
