@@ -35,6 +35,7 @@ import {
 } from "../helpers/release-workflow-timeouts.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import { createPnpmArchiveFixture } from "./setup-pnpm-archive.test-support.js";
+import { sharedSurvivorDoctorFlowIndex } from "./upgrade-survivor-runner.test-support.js";
 
 const PACKAGE_ACCEPTANCE_WORKFLOW = ".github/workflows/package-acceptance.yml";
 const LIVE_E2E_WORKFLOW = ".github/workflows/openclaw-live-and-e2e-checks-reusable.yml";
@@ -9143,7 +9144,7 @@ describe("package artifact reuse", () => {
     const preDoctorCleanupIndex = publishedUpgradeSurvivor.indexOf(
       "run_plugin_fixture_phase assert-package-local-dependency-cleanup assert_legacy_plugin_dependency_debris_cleaned",
     );
-    const doctorIndex = publishedUpgradeSurvivor.indexOf("phase doctor run_doctor");
+    const doctorIndex = sharedSurvivorDoctorFlowIndex(publishedUpgradeSurvivor);
     const postDoctorCleanupIndex = publishedUpgradeSurvivor.indexOf(
       "run_plugin_fixture_phase assert-legacy-plugin-dependency-debris-cleaned assert_legacy_plugin_dependency_debris_cleaned",
     );

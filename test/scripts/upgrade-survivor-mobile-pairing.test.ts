@@ -36,6 +36,7 @@ import {
   validatePairingAudit,
   verifyDeviceAuthPayloadSignature,
 } from "../../scripts/e2e/lib/upgrade-survivor/mobile-pairing-client.mts";
+import { sharedSurvivorDoctorFlowIndex } from "./upgrade-survivor-runner.test-support.js";
 
 const CLIENT_PATH = "scripts/e2e/lib/upgrade-survivor/mobile-pairing-client.mts";
 const RUNNER_PATH = "scripts/e2e/lib/upgrade-survivor/run.sh";
@@ -631,7 +632,7 @@ describe("upgrade survivor mobile pairing client", () => {
       "phase assert-historical-package-replacement-startup-repair",
     );
     const candidateRestart = source.indexOf("phase mobile-pairing-candidate-restart");
-    const doctor = source.indexOf("phase doctor run_doctor");
+    const doctor = sharedSurvivorDoctorFlowIndex(source);
     const final = source.indexOf("phase mobile-pairing-final");
 
     expect(bootstrap).toBeGreaterThan(-1);

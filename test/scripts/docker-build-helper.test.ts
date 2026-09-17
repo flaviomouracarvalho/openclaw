@@ -32,6 +32,7 @@ import {
   readUpgradeSurvivorPaths,
   UPGRADE_SURVIVOR_PATHS_HELPER,
 } from "./upgrade-survivor-paths.test-support.js";
+import { sharedSurvivorDoctorFlowIndex } from "./upgrade-survivor-runner.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const testNodeExecPath = resolveTestNodeExecPath();
@@ -458,8 +459,11 @@ function copySurvivorCaptureClosure(workDir: string) {
     "scripts/e2e/lib/plugin-index-sqlite.mjs",
     "scripts/e2e/lib/env-limits.mjs",
     "scripts/e2e/lib/text-file-utils.mjs",
+    "scripts/e2e/lib/upgrade-survivor/channel-post-core-state.mjs",
     UPGRADE_SURVIVOR_DIAGNOSTICS_PATH,
     "scripts/lib/release-version.mjs",
+    "scripts/lib/upgrade-survivor-policy.mjs",
+    "scripts/lib/upgrade-survivor-scenarios.json",
   ]) {
     const destination = join(workDir, source);
     mkdirSync(dirname(destination), { recursive: true });
@@ -3069,7 +3073,7 @@ docker_e2e_docker_run_cmd run demo
     );
     expect(
       publishedRunner.indexOf("phase assert-prepublish-requests assert_prepublish_plugin_install"),
-    ).toBeLessThan(publishedRunner.indexOf("phase doctor run_doctor"));
+    ).toBeLessThan(sharedSurvivorDoctorFlowIndex(publishedRunner));
     const discordInstallIndex = runner.indexOf(
       'openclaw_e2e_fixture_plugin_command openclaw -- \\\n    plugins install "npm:@openclaw/discord@$package_version" --pin',
     );
