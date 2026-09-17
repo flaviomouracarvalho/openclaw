@@ -236,7 +236,11 @@ export class CodexCatalogPersistence {
   }
 
   private queue(key: string, value: StoredCodexCatalogEntry | undefined): void {
-    if (!this.state || this.retired) {
+    // Failure cleanup joins an admitted drain without reopening retired persistence.
+    if (
+      !this.state ||
+      (this.retired && (!this.writing || key !== "complete" || value !== undefined))
+    ) {
       return;
     }
     if (

@@ -299,8 +299,11 @@ describe("resident Codex catalog recovery", () => {
         assertCurrent: () => {},
       });
       const harness = createClientHarness();
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval"] });
       try {
         await index.initialize();
+        // Drain startup currency before arranging the native-read/file-write race.
+        await vi.advanceTimersByTimeAsync(0);
         await index.reconcile();
         await observeCodexCatalogClient(harness.client, { startOptions });
         harness.send({
@@ -356,6 +359,7 @@ describe("resident Codex catalog recovery", () => {
       } finally {
         await harness.client.closeAndWait();
         await index.close();
+        vi.useRealTimers();
       }
     },
   );

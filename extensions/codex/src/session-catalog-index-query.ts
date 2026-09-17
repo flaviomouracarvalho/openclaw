@@ -86,17 +86,19 @@ export function prepareCodexCatalogQuery(homeId: string, params: CodexSessionCat
     ) {
       return undefined;
     }
-    const selected = ordered.filter((row) => {
+    const candidates = ordered.filter((row) => {
       const session = row.page.sessions[0];
       return (
         !row.archived &&
         session &&
-        (!anchor?.backwards || row.threadId !== anchor.threadId) &&
         (complete || !frontier || compareCodexCatalogRows(row, frontier) <= 0) &&
         (!cwd || (liveSettings.get(row.threadId)?.cwd ?? session.cwd) === cwd) &&
         (!search || (session.name ?? session.fallbackName)?.toLocaleLowerCase().includes(search))
       );
     });
+    const selected = anchor?.backwards
+      ? candidates.filter((row) => row.threadId !== anchor.threadId)
+      : candidates;
     let start = 0;
     let end: number | undefined;
     const after = (row: CodexCatalogOrderKey) =>
@@ -115,7 +117,12 @@ export function prepareCodexCatalogQuery(homeId: string, params: CodexSessionCat
     const first = page[0];
     const last = page.at(-1);
     let continuation: CodexCatalogOrderKey | undefined =
-      last && start + page.length < selected.length ? last : undefined;
+      last &&
+      (anchor?.backwards
+        ? candidates.some((row) => compareCodexCatalogRows(row, last) > 0)
+        : start + page.length < selected.length)
+        ? last
+        : undefined;
     if (!complete && !anchor?.backwards && !continuation) {
       if (!last && (!frontier || !after(frontier))) {
         return undefined;
