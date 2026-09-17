@@ -32,22 +32,33 @@ import { createMessageTool } from "./message-tool-execution.js";
 it.each([
   {
     cause: "message authority is durably revoked",
+    revokeAt: "provider" as const,
     retire: noteActiveCronJobMessageActionAuthorityMutation,
+    accepted: true,
     laterError: "cron message action authority is no longer active",
   },
   {
     cause: "the active job is cancelled",
+    revokeAt: "provider" as const,
     retire: (jobId: string) =>
       requestActiveCronJobCancellation(jobId, "Cron job removed by operator."),
+    accepted: true,
     laterError: "Message send aborted",
   },
+  {
+    cause: "message authority closes during provider target lookup",
+    revokeAt: "target" as const,
+    retire: noteActiveCronJobMessageActionAuthorityMutation,
+    accepted: false,
+    laterError: "cron message action authority is no longer active",
+  },
 ])(
-  "fences later scheduled sends while preserving a send accepted before $cause",
-  async ({ retire, laterError }) => {
+  "owns scheduled message lifetime when $cause",
+  async ({ revokeAt, retire, accepted, laterError }) => {
     const registry = captureActivePluginRegistrySnapshot();
     const source = new AbortController();
-    const sendEntered = createDeferred();
-    const releaseSend = createDeferred();
+    const boundaryEntered = createDeferred();
+    const releaseBoundary = createDeferred();
     const jobId = "scheduled-message-lifetime";
     const runId = "scheduled-message-lifetime-run";
     const sessionKey = `agent:main:cron:${jobId}:run:${runId}`;
@@ -70,14 +81,27 @@ it.each([
       const sends: string[] = [];
       const sendText = vi.fn(async ({ text }: ChannelOutboundContext) => {
         sends.push(text);
-        sendEntered.resolve();
-        await releaseSend.promise;
+        if (revokeAt === "provider") {
+          boundaryEntered.resolve();
+          await releaseBoundary.promise;
+        }
         return { channel: "discord", messageId: `message-${sends.length}` };
       });
+      const listTargetsLive = async () => {
+        if (revokeAt === "target") {
+          boundaryEntered.resolve();
+          await releaseBoundary.promise;
+        }
+        return [{ id: "channel:100000000000000001", name: "alerts" }];
+      };
       const plugin: ChannelPlugin = {
         ...createChannelTestPluginBase({ id: "discord" }),
         actions: { describeMessageTool: () => ({ actions: ["send"] }) },
         outbound: { deliveryMode: "direct", sendText },
+        directory: {
+          listGroupsLive: listTargetsLive,
+          listPeersLive: listTargetsLive,
+        },
       };
       setActivePluginRegistry(
         createTestRegistry([{ pluginId: plugin.id, source: "test", plugin }]),
@@ -137,7 +161,7 @@ it.each([
           {
             action: "send",
             channel: "discord",
-            target: "channel:100000000000000001",
+            target: revokeAt === "target" ? "alerts" : "channel:100000000000000001",
             message,
             ...(gatewayUrl ? { gatewayUrl } : {}),
           },
@@ -151,19 +175,27 @@ it.each([
 
       pending = send("accepted-before-revocation", "first");
       void pending.catch(() => undefined);
-      await withTestTimeout(sendEntered.promise, 5000, "Scheduled provider send did not start");
+      await withTestTimeout(
+        boundaryEntered.promise,
+        5000,
+        "Scheduled provider boundary not reached",
+      );
       retire(jobId);
-      releaseSend.resolve();
+      releaseBoundary.resolve();
 
-      await expect(pending).resolves.toMatchObject({
-        details: { result: { messageId: "message-1" } },
-      });
+      if (accepted) {
+        await expect(pending).resolves.toMatchObject({
+          details: { result: { messageId: "message-1" } },
+        });
+      } else {
+        await expect(pending).rejects.toThrow("cron message action authority is no longer active");
+      }
       await expect(send("after-revocation", "second")).rejects.toThrow(laterError);
-      expect(sendText).toHaveBeenCalledOnce();
-      expect(sends).toEqual(["first"]);
+      expect(sendText).toHaveBeenCalledTimes(accepted ? 1 : 0);
+      expect(sends).toEqual(accepted ? ["first"] : []);
     } finally {
       source.abort();
-      releaseSend.resolve();
+      releaseBoundary.resolve();
       await pending?.catch(() => undefined);
       admission?.close();
       releaseCancellation?.();

@@ -145,14 +145,20 @@ async function handleBroadcastAction(
           accountId: explicitAccountId,
         });
         const targetArgs: Record<string, unknown> = { to: target };
-        const resolved = await resolveMessageTarget({
-          cfg: input.cfg,
-          channel: targetChannel,
-          action: "send",
-          args: targetArgs,
-          accountId: targetAccountId,
-          plugin: targetChannelPlugin,
-        });
+        const resolved = await withChannelReadAuthority(
+          input.messageActionAuthorization?.scheduled
+            ? input.assertDirectAdapterHandoff
+            : undefined,
+          () =>
+            resolveMessageTarget({
+              cfg: input.cfg,
+              channel: targetChannel,
+              action: "send",
+              args: targetArgs,
+              accountId: targetAccountId,
+              plugin: targetChannelPlugin,
+            }),
+        );
         if (!resolved) {
           throw new Error("Broadcast target resolution unexpectedly deferred.");
         }
@@ -489,11 +495,17 @@ export async function runMessageAction(input: MessageActionInput): Promise<Messa
     actionParams: params,
     agentId: resolvedAgentId,
   });
+  const genericScheduledPreparationAuthority =
+    !route.assertReadAuthorityCurrent &&
+    !route.assertTargetAuthorityCurrent &&
+    input.messageActionAuthorization?.scheduled
+      ? input.assertDirectAdapterHandoff
+      : undefined;
   return await withChannelReadAuthority(
     route.assertReadAuthorityCurrent,
     async () => {
       const context = await withChannelReadAuthority(
-        route.assertTargetAuthorityCurrent,
+        route.assertTargetAuthorityCurrent ?? genericScheduledPreparationAuthority,
         async (): Promise<ResolvedActionContext> => {
           params = route.params;
           const { channel, channelPlugin, accountId, dryRun, defersExternalTargetResolution } =
