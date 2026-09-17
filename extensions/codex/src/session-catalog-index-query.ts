@@ -70,6 +70,7 @@ export function prepareCodexCatalogQuery(homeId: string, params: CodexSessionCat
       );
     });
     let start = 0;
+    let end: number | undefined;
     if (anchor) {
       const after = (row: CodexCatalogIndexRow) =>
         codexCatalogRowRecency(row) < anchor.time ||
@@ -79,13 +80,15 @@ export function prepareCodexCatalogQuery(homeId: string, params: CodexSessionCat
       const at = selected.findIndex(
         (row) => after(row) || (anchor.backwards && row.threadId === anchor.id),
       );
-      start = anchor.backwards
-        ? Math.max(0, (at < 0 ? selected.length : at) - limit)
-        : at < 0
-          ? selected.length
-          : at;
+      const boundary = at < 0 ? selected.length : at;
+      if (anchor.backwards) {
+        end = boundary;
+        start = Math.max(0, boundary - limit);
+      } else {
+        start = boundary;
+      }
     }
-    const page = selected.slice(start, start + limit);
+    const page = selected.slice(start, end ?? start + limit);
     const first = page[0];
     const last = page.at(-1);
     return {

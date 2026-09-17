@@ -3,6 +3,7 @@ import path from "node:path";
 import { zstdCompressSync } from "node:zlib";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { CODEX_CATALOG_MAX_ROWS } from "./session-catalog-index-state.js";
 import { readCodexCatalogRollout, scanCodexCatalogRollouts } from "./session-catalog-rollouts.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -33,20 +34,24 @@ async function fixture(contents: string | Buffer, fileName = "rollout-test.jsonl
 describe("resident catalog rollout currency", () => {
   it("distinguishes a missing root from an unreadable scan", async () => {
     const f = await fixture(meta());
-    expect(await scanCodexCatalogRollouts(path.join(f.root, "missing"))).toEqual(new Map());
+    expect(await scanCodexCatalogRollouts(path.join(f.root, "missing"), new Set())).toEqual({
+      files: new Map(),
+      present: new Set(),
+    });
     const error = Object.assign(new Error("permission denied"), { code: "EACCES" });
-    vi.spyOn(fs, "readdir").mockRejectedValueOnce(error);
-    await expect(scanCodexCatalogRollouts(f.root)).rejects.toBe(error);
+    vi.spyOn(fs, "opendir").mockRejectedValueOnce(error);
+    await expect(scanCodexCatalogRollouts(f.root, new Set())).rejects.toBe(error);
   });
 
   it("reports an unreadable rollout separately from incomplete metadata", async () => {
     const f = await fixture(meta());
-    const before = await scanCodexCatalogRollouts(f.root);
+    const tracked = new Set([f.file]);
+    const before = await scanCodexCatalogRollouts(f.root, tracked);
     const error = Object.assign(new Error("permission denied"), { code: "EACCES" });
     const open = vi.spyOn(fs, "open").mockRejectedValueOnce(error);
     await expect(readCodexCatalogRollout(f.root, f.file)).rejects.toBe(error);
     open.mockRestore();
-    expect(await scanCodexCatalogRollouts(f.root)).toEqual(before);
+    expect(await scanCodexCatalogRollouts(f.root, tracked)).toEqual(before);
     expect(await readCodexCatalogRollout(f.root, f.file)).toMatchObject({ id: "native-thread" });
   });
 
@@ -54,7 +59,8 @@ describe("resident catalog rollout currency", () => {
     const f = await fixture(meta());
     const read = vi.spyOn(fs, "readFile");
     const open = vi.spyOn(fs, "open");
-    const first = await scanCodexCatalogRollouts(f.root);
+    const tracked = new Set([f.file]);
+    const { files: first } = await scanCodexCatalogRollouts(f.root, tracked);
     expect(first.get(f.file)).toEqual({
       mtimeMs: expect.any(Number),
       size: Buffer.byteLength(meta()),
@@ -65,11 +71,45 @@ describe("resident catalog rollout currency", () => {
     await fs.mkdir(newDay);
     const added = path.join(newDay, "rollout-new.jsonl.zst");
     await fs.writeFile(added, zstdCompressSync(meta("new-thread")));
-    const next = await scanCodexCatalogRollouts(f.root);
+    const { files: next, present } = await scanCodexCatalogRollouts(f.root, tracked);
     expect(next.size).toBe(2);
     expect(next.get(f.file)).toEqual(first.get(f.file));
     expect(next.has(compressedSibling)).toBe(false);
     expect(next.has(added)).toBe(true);
+    expect(present).toEqual(new Set([f.file]));
+    expect(read).not.toHaveBeenCalled();
+    expect(open).not.toHaveBeenCalled();
+  });
+
+  it("bounds a wide day-folder scan to the newest resident fingerprint budget", async () => {
+    const f = await fixture(meta());
+    const fileAt = (index: number) =>
+      path.join(f.day, `rollout-${String(index).padStart(5, "0")}.jsonl`);
+    const count = CODEX_CATALOG_MAX_ROWS + 1;
+    for (let start = 0; start < count; start += 128) {
+      await Promise.all(
+        Array.from({ length: Math.min(128, count - start) }, (_, offset) =>
+          fs.writeFile(fileAt(start + offset), ""),
+        ),
+      );
+    }
+    const oldest = new Date("2000-01-01T00:00:00.000Z");
+    const secondOldest = new Date("2001-01-01T00:00:00.000Z");
+    const newest = new Date("2030-01-01T00:00:00.000Z");
+    await fs.utimes(f.file, oldest, oldest);
+    await fs.utimes(fileAt(0), secondOldest, secondOldest);
+    await fs.utimes(fileAt(count - 1), newest, newest);
+    const read = vi.spyOn(fs, "readFile");
+    const open = vi.spyOn(fs, "open");
+    const readdir = vi.spyOn(fs, "readdir");
+    const tracked = new Set([f.file, path.join(f.day, "missing.jsonl")]);
+    const { files, present } = await scanCodexCatalogRollouts(f.root, tracked);
+    expect(files.size).toBe(CODEX_CATALOG_MAX_ROWS);
+    expect(files.has(f.file)).toBe(false);
+    expect(files.has(fileAt(0))).toBe(false);
+    expect(files.has(fileAt(count - 1))).toBe(true);
+    expect(present).toEqual(new Set([f.file]));
+    expect(readdir).not.toHaveBeenCalled();
     expect(read).not.toHaveBeenCalled();
     expect(open).not.toHaveBeenCalled();
   });
@@ -78,14 +118,19 @@ describe("resident catalog rollout currency", () => {
     const outside = await fixture(meta());
     const root = tempDirs.make("openclaw-catalog-rollout-links-");
     await fs.symlink(path.join(outside.root, "2026"), path.join(root, "2026"));
-    expect(await scanCodexCatalogRollouts(root)).toEqual(new Map());
+    expect(await scanCodexCatalogRollouts(root, new Set())).toEqual({
+      files: new Map(),
+      present: new Set(),
+    });
     await expect(readCodexCatalogRollout(root, outside.file)).resolves.toBeUndefined();
     const f = await fixture(meta("own-thread"));
     const linked = path.join(f.day, "rollout-link.jsonl");
     const hardlinked = path.join(f.day, "rollout-hard.jsonl");
     await fs.symlink(outside.file, linked);
     await fs.link(outside.file, hardlinked);
-    expect([...(await scanCodexCatalogRollouts(f.root)).keys()]).toEqual([f.file]);
+    const scanned = await scanCodexCatalogRollouts(f.root, new Set([f.file, linked, hardlinked]));
+    expect([...scanned.files.keys()]).toEqual([f.file]);
+    expect(scanned.present).toEqual(new Set([f.file]));
     await expect(readCodexCatalogRollout(f.root, linked)).resolves.toBeUndefined();
     await expect(readCodexCatalogRollout(f.root, hardlinked)).resolves.toBeUndefined();
   });

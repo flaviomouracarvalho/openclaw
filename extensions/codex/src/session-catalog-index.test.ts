@@ -79,6 +79,24 @@ describe("resident Codex catalog", () => {
     expect(open).not.toHaveBeenCalled();
   });
 
+  it.each(["larger limit", "removed rows"])(
+    "ends a backward page before its anchor after %s",
+    async (change) => {
+      const control = await fixture(90).make();
+      const limit = change === "larger limit" ? 20 : 64;
+      const first = await control.listPage({ limit });
+      const second = await control.listPage({ limit, cursor: first.nextCursor });
+      const removed = change === "removed rows" ? first.sessions.slice(0, 24) : [];
+      for (const session of removed) {
+        await control.archiveThread(session.threadId);
+      }
+      const previous = await control.listPage({ limit: 64, cursor: second.backwardsCursor });
+      expect(previous.sessions.map((session) => session.threadId)).toEqual(
+        first.sessions.slice(removed.length).map((session) => session.threadId),
+      );
+    },
+  );
+
   it("hydrates the complete home once while retaining 64-row wire pages", async () => {
     const f = fixture();
     const control = await f.make();

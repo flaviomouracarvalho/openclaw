@@ -389,11 +389,8 @@ export class CodexCatalogIndex {
   ): Promise<number> {
     this.assertCurrent();
     const files = this.options.localSessionsRoot
-      ? await scanCodexCatalogRollouts(this.options.localSessionsRoot)
+      ? (await scanCodexCatalogRollouts(this.options.localSessionsRoot, new Set())).files
       : new Map<string, CodexCatalogRolloutFingerprint>();
-    const logicalFiles = new Map(
-      [...files].map(([file, fingerprint]) => [codexCatalogRolloutLogicalPath(file), fingerprint]),
-    );
     let cursor: string | undefined;
     let observedRevision = this.sourceRevision;
     let firstPage = true;
@@ -432,8 +429,9 @@ export class CodexCatalogIndex {
         if (!isCurrent(row.threadId)) {
           continue;
         }
-        const fingerprint = row.rolloutPath
-          ? logicalFiles.get(codexCatalogRolloutLogicalPath(row.rolloutPath))
+        const logicalPath = row.rolloutPath && codexCatalogRolloutLogicalPath(row.rolloutPath);
+        const fingerprint = logicalPath
+          ? (files.get(logicalPath) ?? files.get(`${logicalPath}.zst`))
           : undefined;
         const previous = this.rows.get(row.threadId);
         this.markMutation(row.threadId);
@@ -520,14 +518,10 @@ export class CodexCatalogIndex {
         row.rolloutPath ? [[codexCatalogRolloutLogicalPath(row.rolloutPath), row] as const] : [],
       ),
     );
-    const files = await scanCodexCatalogRollouts(root);
-    const logicalFiles = new Set([...files.keys()].map(codexCatalogRolloutLogicalPath));
+    const { files, present } = await scanCodexCatalogRollouts(root, new Set(byPath.keys()));
     this.assertCurrent();
-    const candidates = [...files]
-      .toSorted((a, b) => b[1].mtimeMs - a[1].mtimeMs)
-      .slice(0, CODEX_CATALOG_MAX_ROWS);
-    const observed = new Map(candidates);
-    for (const [file, fingerprint] of candidates) {
+    const observed = new Map(files);
+    for (const [file, fingerprint] of files) {
       const previous = byPath.get(codexCatalogRolloutLogicalPath(file));
       const known = this.observedFiles.get(file) ?? previous?.fingerprint;
       if (known?.mtimeMs === fingerprint.mtimeMs && known.size === fingerprint.size) {
@@ -594,7 +588,7 @@ export class CodexCatalogIndex {
       if (
         row.rolloutPath &&
         isCodexCatalogRolloutPathCovered(root, row.rolloutPath) &&
-        !logicalFiles.has(codexCatalogRolloutLogicalPath(row.rolloutPath)) &&
+        !present.has(codexCatalogRolloutLogicalPath(row.rolloutPath)) &&
         this.rows.get(row.threadId) === row
       ) {
         this.remove(row.threadId);

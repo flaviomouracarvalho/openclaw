@@ -55,7 +55,9 @@ need preview projection. Unchanged rows are not rewritten to SQLite.
 
 Native lifecycle notifications update affected threads, and successful catalog
 archives immediately hide their rows. A debounced recursive directory watcher
-and a 30-second stat-only scan discover external rollout changes. Only changed or
+and a 30-second stat-only scan discover external rollout changes. The scan streams
+directory entries and retains at most 20,000 file fingerprints while separately
+checking the presence of resident paths. Only changed or
 new files are read: at most 128 KiB each from the head and tail of a plain rollout,
 or a bounded 128 KiB compressed head. A missing first-user preview stays missing
 until a later change makes it discoverable. Native titles are preserved when a
