@@ -14,7 +14,7 @@ import type { CodexSessionCatalogPage } from "./session-catalog-types.js";
 
 export const CODEX_CATALOG_STATE_NAMESPACE = "session-catalog-resident";
 export type StoredCodexCatalogEntry =
-  | { version: 1; kind: "complete" }
+  | { version: 1; kind: "complete"; overflow?: true }
   | { version: 1; kind: "row"; row: CodexCatalogIndexRow };
 export type CodexCatalogState = Pick<
   PluginStateKeyedStore<StoredCodexCatalogEntry>,
@@ -119,6 +119,7 @@ async function readCodexCatalogSnapshot(state: CodexCatalogState | undefined) {
     }
   };
   let complete = false;
+  let overflow = false;
   for (const entry of entries) {
     if (Buffer.byteLength(entry.key) > CODEX_CATALOG_MAX_STATE_KEY_BYTES) {
       valid = false;
@@ -127,6 +128,7 @@ async function readCodexCatalogSnapshot(state: CodexCatalogState | undefined) {
     }
     if (entry.value?.version === 1 && entry.value.kind === "complete") {
       complete = true;
+      overflow ||= entry.value.overflow === true;
       continue;
     }
     const row = readStoredCodexCatalogRow(entry.value);
@@ -154,7 +156,7 @@ async function readCodexCatalogSnapshot(state: CodexCatalogState | undefined) {
       obsolete.add("complete");
     }
   }
-  return { rows: [...rows.values()], complete, obsolete, cleanupIncomplete };
+  return { rows: [...rows.values()], complete, overflow, obsolete, cleanupIncomplete };
 }
 
 /** Serializes reconstructible cache writes without blocking resident queries. */
@@ -210,10 +212,14 @@ export class CodexCatalogPersistence {
     await this.drain();
   }
 
-  async finishHydration(): Promise<void> {
+  async finishHydration(overflow = false): Promise<void> {
     await this.drain();
     if (!this.failed) {
-      this.queue("complete", { version: 1, kind: "complete" });
+      this.queue("complete", {
+        version: 1,
+        kind: "complete",
+        ...(overflow ? { overflow: true } : {}),
+      });
       await this.drain();
     }
   }

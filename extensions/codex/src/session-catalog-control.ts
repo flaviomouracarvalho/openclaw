@@ -31,18 +31,13 @@ import {
   startCodexCatalogControlRequestDiagnostics,
   type CodexCatalogPageDiagnostics,
 } from "./session-catalog-diagnostics.js";
+import { requireEligibleCodexThread } from "./session-catalog-eligibility.js";
 import { codexCatalogResidentHomeKey } from "./session-catalog-events.js";
 import { createCodexCatalogHomeResolver, type CodexCatalogHome } from "./session-catalog-homes.js";
 import type { CodexCatalogState } from "./session-catalog-index-state.js";
 import type { CodexCatalogIndex } from "./session-catalog-index.js";
 import type { CodexCatalogPreviewCache } from "./session-catalog-native-projection.js";
-import {
-  CatalogParamsError,
-  isInteractiveThreadSource,
-  readControlCursor,
-  readPageParams,
-} from "./session-catalog-parsing.js";
-import { readCodexSessionMeta } from "./session-catalog-provenance.js";
+import { readControlCursor, readPageParams } from "./session-catalog-parsing.js";
 import { CodexCatalogSourceBackoff } from "./session-catalog-source-backoff.js";
 import type {
   CodexSessionCatalogControl,
@@ -148,71 +143,15 @@ function createCodexSessionCatalogControlFromRequests(params: {
     async initialize() {
       await (await params.createRequestSnapshot().index()).initialize();
     },
-    async requireEligibleThread(threadId) {
-      const requests = params.createRequestSnapshot();
-      const deadline = params.now() + requests.requestTimeoutMs;
-      const unverified = () =>
-        new CatalogParamsError(
-          "Codex session eligibility could not be verified. Refresh the catalog and verify the session in its native Codex home before retrying.",
-        );
-      const remaining = () => {
-        const timeoutMs = Math.ceil(deadline - params.now());
-        if (timeoutMs <= 0) {
-          throw unverified();
-        }
-        return timeoutMs;
-      };
-      const verify = async () => {
-        if (
-          params.sourceHomeId &&
-          (await params.managedThreads?.has(params.sourceHomeId, threadId))
-        ) {
-          throw unverified();
-        }
-        remaining();
-        const index = await requests.index();
-        const root = params.localSessionsRoot;
-        if (!root) {
-          await index.initialize();
-          remaining();
-        }
-        const candidate = index.get(threadId);
-        if (candidate?.archived || (!root && !candidate?.page.sessions.length)) {
-          throw unverified();
-        }
-        // Local exact reads remain usable when broad native discovery is unavailable.
-        // The selected root and fresh metadata prove the thread's source; the index
-        // supplies existing membership without a second native list authority.
-        const thread = await requests.readThread(threadId, false, remaining());
-        if (thread.id !== threadId || !isInteractiveThreadSource(thread.source)) {
-          throw unverified();
-        }
-        if (root) {
-          // Native reads resolve the selected rollout; a cached path can predate a revert.
-          if (!thread.path) {
-            throw unverified();
-          }
-          const metadata = await readCodexSessionMeta(root, thread.path, threadId);
-          remaining();
-          if (
-            !metadata ||
-            !isInteractiveThreadSource(metadata.source) ||
-            metadata.originator === "openclaw"
-          ) {
-            throw unverified();
-          }
-          await index.upsertThread(thread);
-          remaining();
-        }
-        return thread;
-      };
-      return await withTimeout(
-        verify(),
-        requests.requestTimeoutMs,
-        "Codex session eligibility could not be verified",
-        unverified,
-      );
-    },
+    requireEligibleThread: (threadId) =>
+      requireEligibleCodexThread({
+        threadId,
+        requests: params.createRequestSnapshot(),
+        localSessionsRoot: params.localSessionsRoot,
+        sourceHomeId: params.sourceHomeId,
+        managedThreads: params.managedThreads,
+        now: params.now,
+      }),
     retireConnection: params.retireConnection,
     async listPage(pageParams) {
       readControlCursor(pageParams.cursor, "request");
@@ -373,6 +312,7 @@ export function createCodexSessionCatalogControl(params: {
           response: CodexThreadListResponse,
           diagnostics: CodexCatalogPageDiagnostics | undefined,
         ) => T | Promise<T>,
+        standalone = false,
       ): Promise<T> => {
         const requests = createRequestSnapshot(
           agentId,
@@ -386,10 +326,11 @@ export function createCodexSessionCatalogControl(params: {
             : undefined,
           remainingRows,
         );
-        if (!query.cursor || !nativeAttempt) {
-          nativeAttempt = requests.beginList();
+        const attempt =
+          !standalone && query.cursor && nativeAttempt ? nativeAttempt : requests.beginList();
+        if (!standalone) {
+          nativeAttempt = attempt;
         }
-        const attempt = nativeAttempt;
         if (!attempt.allowed) {
           throw attempt.error;
         }
@@ -413,15 +354,19 @@ export function createCodexSessionCatalogControl(params: {
           }
           const page = await project(response, diagnostics);
           outcome = "resolved";
-          if (!page.nextCursor) {
+          if (standalone || !page.nextCursor) {
             attempt.resolved();
-            nativeAttempt = undefined;
+            if (!standalone) {
+              nativeAttempt = undefined;
+            }
           }
           return page;
         } catch (error) {
           observation?.rejected();
           attempt.rejected(error);
-          nativeAttempt = undefined;
+          if (!standalone) {
+            nativeAttempt = undefined;
+          }
           throw error;
         } finally {
           observation?.close();
@@ -440,22 +385,27 @@ export function createCodexSessionCatalogControl(params: {
             throw new Error("Codex catalog configuration changed");
           }
         },
-        readNative: (query, remainingRows) =>
-          readNativePage(query, Math.min(64, remainingRows), async (response, diagnostics) => {
-            const { sanitizeTerminalText } = await import("openclaw/plugin-sdk/text-chunking");
-            const bounded = { ...response, data: response.data.slice(0, remainingRows) };
-            const projection = {
-              localSessionsRoot: root,
-              sanitize: sanitizeTerminalText,
-              diagnostics,
-            };
-            return query.useStateDbOnly
-              ? await projectCodexCatalogDeltaPage(bounded, {
-                  ...projection,
-                  getRow: (threadId) => index?.get(threadId),
-                })
-              : await projectCodexCatalogPage(bounded, projection);
-          }),
+        readNative: (query, remainingRows, standalone) =>
+          readNativePage(
+            query,
+            Math.min(64, remainingRows),
+            async (response, diagnostics) => {
+              const { sanitizeTerminalText } = await import("openclaw/plugin-sdk/text-chunking");
+              const bounded = { ...response, data: response.data.slice(0, remainingRows) };
+              const projection = {
+                localSessionsRoot: root,
+                sanitize: sanitizeTerminalText,
+                diagnostics,
+              };
+              return query.useStateDbOnly
+                ? await projectCodexCatalogDeltaPage(bounded, {
+                    ...projection,
+                    getRow: (threadId) => index?.get(threadId),
+                  })
+                : await projectCodexCatalogPage(bounded, projection);
+            },
+            standalone,
+          ),
       });
       indexes.set(homeId, index);
     }

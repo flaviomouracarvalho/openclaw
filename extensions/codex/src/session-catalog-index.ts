@@ -8,12 +8,12 @@ import { CodexCatalogAvailability } from "./session-catalog-availability.js";
 import { CodexCatalogCurrency } from "./session-catalog-currency.js";
 import { subscribeCodexCatalogEvents } from "./session-catalog-events.js";
 import type { CodexCatalogIndexOptions } from "./session-catalog-index-contract.js";
+import { readCodexCatalogCursor } from "./session-catalog-index-cursor.js";
 import { CodexCatalogIndexEvents } from "./session-catalog-index-events.js";
 import { CodexCatalogField } from "./session-catalog-index-field.js";
 import { applyCodexCatalogName } from "./session-catalog-index-names.js";
 import { CodexCatalogObservations } from "./session-catalog-index-observations.js";
 import {
-  compareCodexCatalogRows as order,
   CodexCatalogOrdering,
   retainCodexCatalogRow,
   type CodexCatalogOrderKey,
@@ -28,6 +28,7 @@ import {
   CodexCatalogPersistence,
 } from "./session-catalog-index-state.js";
 import { CODEX_CATALOG_MAX_ROWS } from "./session-catalog-limits.js";
+import { listCodexNativeCatalogPage } from "./session-catalog-native-page.js";
 import {
   CODEX_CATALOG_NATIVE_PAGE_LIMIT,
   projectCodexCatalogNativeThread,
@@ -55,16 +56,16 @@ import type {
 
 type FieldRevision = { status: number; name: number };
 
-/** One home owns all queries. Only hydration, notifications and directory currency do I/O. */
+/** One home owns resident queries and authoritative overflow discovery. */
 export class CodexCatalogIndex {
   private readonly rows = new Map<string, CodexCatalogIndexRow>();
   private readonly availability = new CodexCatalogAvailability();
   private readonly liveStatus = new CodexCatalogStatusIndex();
   private readonly liveSettings = new CodexCatalogSettingsIndex();
   private readonly names = new CodexCatalogField<string | null>();
-  private ordered: CodexCatalogIndexRow[] | undefined;
   private initializing: Promise<void> | undefined;
   private initialized = false;
+  private overflow = false;
   private needsNativeRefresh = false;
   private restored = false;
   private restoring: Promise<void> | undefined;
@@ -185,7 +186,8 @@ export class CodexCatalogIndex {
       return;
     }
     const oldest = retainCodexCatalogRow(this.rows, row);
-    this.ordered = undefined;
+    this.overflow ||= this.rows.size >= CODEX_CATALOG_MAX_ROWS;
+    this.ordering.invalidate();
     if (oldest?.threadId === row.threadId) {
       this.liveStatus.delete(row.threadId);
       this.liveSettings.delete(row.threadId);
@@ -204,7 +206,7 @@ export class CodexCatalogIndex {
     this.liveStatus.delete(threadId);
     this.liveSettings.delete(threadId);
     this.names.delete(threadId);
-    this.ordered = undefined;
+    this.ordering.invalidate();
     this.persistence.remove(threadId);
   }
 
@@ -289,6 +291,7 @@ export class CodexCatalogIndex {
             this.ordering.restore(row);
           }
         }
+        this.overflow ||= snapshot.overflow || this.rows.size >= CODEX_CATALOG_MAX_ROWS;
         if (snapshot.complete) {
           this.availability.publish(undefined, true);
           this.initialized = true;
@@ -462,7 +465,7 @@ export class CodexCatalogIndex {
       }
     }
     this.availability.publish(frontier, true);
-    await this.persistence.finishHydration();
+    await this.persistence.finishHydration(this.overflow);
     return observedRevision;
   }
 
@@ -685,14 +688,21 @@ export class CodexCatalogIndex {
     params: CodexSessionCatalogPageParams,
     deadline = performance.now() + (this.options.requestTimeoutMs ?? 60_000),
   ): Promise<CodexSessionCatalogPage> {
-    const query = prepareCodexCatalogQuery(this.options.homeId, params);
+    const cursor = readCodexCatalogCursor(this.options.homeId, params);
+    const query = cursor.kind === "resident" ? prepareCodexCatalogQuery(params, cursor) : undefined;
     await this.availability.until(this.restore(), deadline);
     this.assertCurrent();
     this.scheduleHydration();
     for (;;) {
       this.assertCurrent();
-      this.ordered ??= [...this.rows.values()].toSorted(order);
-      const page = query(this.ordered, this.liveStatus, this.liveSettings, this.availability);
+      const ordered = this.ordering.read(this.rows);
+      const page = query?.(ordered, this.liveStatus, this.liveSettings, this.availability);
+      if (
+        cursor.kind === "native" ||
+        (this.overflow && (params.cwd || params.searchTerm || (page && !page.nextCursor)))
+      ) {
+        return await listCodexNativeCatalogPage(params, cursor, this.options, deadline);
+      }
       if (page) {
         return page;
       }
@@ -724,6 +734,6 @@ export class CodexCatalogIndex {
     ]);
     this.rows.clear();
     this.observedFiles.clear();
-    this.ordered = undefined;
+    this.ordering.invalidate();
   }
 }

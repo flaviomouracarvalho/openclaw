@@ -1,17 +1,15 @@
-import { createHash } from "node:crypto";
 import type { CodexCatalogAvailability } from "./session-catalog-availability.js";
+import {
+  encodeCodexResidentCursor,
+  type CodexResidentCatalogCursor,
+} from "./session-catalog-index-cursor.js";
 import type { CodexCatalogField, CodexCatalogStatus } from "./session-catalog-index-field.js";
 import {
-  codexCatalogRowRecency,
   compareCodexCatalogRows,
   type CodexCatalogOrderKey,
 } from "./session-catalog-index-order.js";
 import type { CodexCatalogIndexRow } from "./session-catalog-index-row.js";
-import {
-  CatalogParamsError,
-  normalizeLimit,
-  readControlCursor,
-} from "./session-catalog-parsing.js";
+import { normalizeLimit } from "./session-catalog-parsing.js";
 import type { CodexCatalogSettingsIndex } from "./session-catalog-settings.js";
 import type {
   CodexSessionCatalogPage,
@@ -19,55 +17,16 @@ import type {
 } from "./session-catalog-types.js";
 
 /** Keyset pagination remains valid when the anchor row is archived or deleted. */
-export function prepareCodexCatalogQuery(homeId: string, params: CodexSessionCatalogPageParams) {
+export function prepareCodexCatalogQuery(
+  params: CodexSessionCatalogPageParams,
+  prepared: CodexResidentCatalogCursor,
+) {
   const limit = Math.min(normalizeLimit(params.limit, "limit"), 64);
-  const encoded = readControlCursor(params.cursor, "request");
   const cwd = params.cwd?.trim();
   const search = params.searchTerm?.trim().toLocaleLowerCase();
-  const queryId = createHash("sha256")
-    .update(JSON.stringify([homeId, cwd ?? "", search ?? ""]))
-    .digest("hex")
-    .slice(0, 16);
-  let anchor: (CodexCatalogOrderKey & { backwards: boolean }) | undefined;
-  if (encoded) {
-    let value: unknown;
-    try {
-      value = JSON.parse(Buffer.from(encoded, "base64url").toString());
-    } catch {
-      throw new CatalogParamsError("invalid Codex resident catalog cursor");
-    }
-    if (
-      !Array.isArray(value) ||
-      value.length !== 5 ||
-      value[0] !== queryId ||
-      typeof value[1] !== "number" ||
-      !Number.isFinite(value[1]) ||
-      typeof value[2] !== "string" ||
-      value[2].length > 256 ||
-      typeof value[3] !== "number" ||
-      !Number.isSafeInteger(value[3]) ||
-      typeof value[4] !== "boolean"
-    ) {
-      throw new CatalogParamsError("invalid Codex resident catalog cursor");
-    }
-    anchor = {
-      updatedAt: value[1],
-      recencyAt: value[1],
-      threadId: value[2],
-      sourceOrder: value[3],
-      backwards: value[4],
-    };
-  }
+  const { queryId, anchor } = prepared;
   const cursor = (row: CodexCatalogOrderKey, backwards: boolean) =>
-    Buffer.from(
-      JSON.stringify([
-        queryId,
-        codexCatalogRowRecency(row),
-        row.threadId,
-        row.sourceOrder ?? 0,
-        backwards,
-      ]),
-    ).toString("base64url");
+    encodeCodexResidentCursor(queryId, row, backwards);
   return (
     ordered: readonly CodexCatalogIndexRow[],
     liveStatus: Pick<CodexCatalogField<CodexCatalogStatus>, "get">,

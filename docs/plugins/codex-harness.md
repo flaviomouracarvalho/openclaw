@@ -15,7 +15,7 @@ channels, session files, model selection, OpenClaw dynamic tools, approvals,
 media delivery, and the visible transcript mirror.
 
 The native session catalog keeps one resident index per Codex home, shared across
-agents, working-directory filters, searches, and pages. Lists filter and page
+agents, working-directory filters, searches, and pages. Lists normally filter and page
 bounded display rows in memory. They do not expire or restart native discovery
 on the normal sidebar polling interval. This memory-only boundary is the local
 resident query. The Gateway also reads session entries from its resident session-row
@@ -40,9 +40,21 @@ If every earlier matching row disappears, backward navigation returns the first
 remaining matching page. An empty known prefix retains forward continuation while
 hydration is incomplete.
 
+The retained window is not a discovery limit. Once a home reaches 20,000 retained
+rows, recent unfiltered pages still use memory. Paging at the retained boundary,
+working-directory queries, and title searches use authoritative native database-only
+pages, including sessions absent from memory. Those requests can be slower. Each
+fallback page request retains at most one 64-row native page and scans at most 20 native pages,
+and return an opaque continuation when more work remains. Continue paging even
+when a partial search page is empty. Native cursors preserve native ordering and
+backward navigation. If a resident-to-native transition loses its anchor to a
+concurrent native mutation, it reports a refresh error instead of silently ending
+discovery. The snapshot remembers that the retained window may be incomplete.
+
 Search and managed-session exclusion filling examine at most 20 resident pages
 per request. If that limit is reached, the result retains an opaque continuation
-cursor so the next request can find later visible matches without native reads.
+cursor so the next request can find later visible matches. Queries served entirely
+from the resident window perform no native reads; overflow discovery is the explicit exception.
 
 Explicit homes hydrate in the background when the plugin activates. An implicit
 process home waits for an authorized catalog request. A home without a valid,
@@ -57,8 +69,8 @@ loading error and asks the caller to retry. The shared hydration continues in th
 background. Partial or invalid saved caches are rebuilt before their rows are
 shown, and initial retries preserve positions already used in continuation cursors.
 The index persists reconstructible display rows and file fingerprints through
-plugin state in the OpenClaw SQLite database. A valid complete snapshot serves the
-first list without a native request, including on remote app-servers.
+plugin state in the OpenClaw SQLite database. A valid complete snapshot serves a
+recent unfiltered page without a native request, including on remote app-servers.
 Snapshot restoration waits for earlier cache writes, and mutations received during
 restoration fence stale saved rows from publication. Background work then
 reconciles changed files and native metadata. A
@@ -126,7 +138,8 @@ cannot replace the current session's path or metadata during a filesystem scan.
 Each home retains at most 20,000 display rows, 20,000 live-status records,
 20,000 live-settings records, 20,000 name records, and 20,000 scan fingerprints, matching the existing Codex
 managed-thread ceiling; eviction drops the oldest archived rows first, then the
-oldest remaining rows. Native walks finish pagination, but rows beyond the
+oldest remaining rows. Eviction removes only cached metadata: older sessions remain
+discoverable through native paging/search and readable by ID. Background native walks finish pagination, but rows beyond the
 resident limit are discarded before native-response metadata projection or preview
 sanitization. The native page size stays 64, and pagination continues to completion.
 At most 20,000 detached native cursors are remembered during a walk.
@@ -139,6 +152,10 @@ change. A snapshot read failure invalidates durable completeness for that index
 lifetime; native hydration remains available in memory, and the next successful
 restart enumerates and prunes unread stale keys. The cache does not
 alter native session files, update migrations, or rollback.
+An exact-thread cache miss uses fresh native metadata. Remote eligibility additionally
+checks authoritative non-archived membership because native `thread/read` can return
+archived threads. These checks use the existing request deadline, without a retained-row
+or page-count cutoff; paired-node exact lookup follows continuations under its existing deadline.
 Gateway aggregation only coalesces concurrent requests, so completed aggregate
 responses cannot delay the next poll's view of resident changes.
 

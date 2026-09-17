@@ -45,6 +45,15 @@ export function retainCodexCatalogRow(
 /** Stable positions keep issued cursors independent of later native page offsets. */
 export class CodexCatalogOrdering {
   private nextEventOrder = -1;
+  private ordered: CodexCatalogIndexRow[] | undefined;
+
+  read(rows: ReadonlyMap<string, CodexCatalogIndexRow>): readonly CodexCatalogIndexRow[] {
+    return (this.ordered ??= [...rows.values()].toSorted(compareCodexCatalogRows));
+  }
+
+  invalidate(): void {
+    this.ordered = undefined;
+  }
 
   restore(row: CodexCatalogIndexRow): void {
     this.nextEventOrder = Math.min(this.nextEventOrder, (row.sourceOrder ?? 0) - 1);

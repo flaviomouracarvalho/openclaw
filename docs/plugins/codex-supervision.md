@@ -175,8 +175,13 @@ reconciles after node-connectivity changes, when it regains focus, and at most
 every 30 seconds. A changed result gets a faster follow-up pass. Sessions created
 in Codex Desktop, the CLI, or another native client appear after the host's
 background directory reconciliation. Native events update threads driven by that
-Gateway without waiting for the periodic scan. Searches and pagination operate on
-the same resident rows. The first page follows recency order, preserving native order within timestamp ties and using a stable
+Gateway without waiting for the periodic scan. Searches and pagination use the
+resident rows while the home fits in memory. The 20,000-row retained window never
+limits discovery: older pages and scoped searches fall back to native database-only
+paging, with opaque continuations for bounded partial results. An empty partial
+search page can still have a continuation. Exact-thread access also verifies older
+IDs against the authoritative source instead of treating eviction as absence.
+The first page follows recency order, preserving native order within timestamp ties and using a stable
 thread key for pagination. A fresh native fork remains readable by ID but can be absent from
 these lists until its first own user turn. See [catalog hydration and bounds](/plugins/codex-harness).
 
@@ -628,7 +633,9 @@ budget and do not scan the full catalog. Missing, unreadable, inconsistent, or
 OpenClaw-managed metadata is not accepted. Refresh the catalog, verify the session
 in its native Codex home, and retry. This error does not prove that the thread
 does not exist. Ordinary discovery keeps its existing behavior. Remote sources
-continue to use native catalog verification.
+continue to use native catalog verification, including when the requested ID was
+evicted from memory. Neither remote nor paired-node verification stops at a fixed
+catalog page count; the existing request deadline still bounds the operation.
 
 **Archive is disabled:** archive is available for stored/activity-unknown and
 idle Gateway-local rows after no-other-runner confirmation. Active, error,
