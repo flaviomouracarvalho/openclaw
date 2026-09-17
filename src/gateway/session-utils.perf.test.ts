@@ -295,6 +295,7 @@ describe("session list resolver cache", () => {
             projection = await createSessionRowProjection({ cfg });
           }
           await control;
+          await projection.ensureMaterialized();
           expect(rowsAtControl).toBeGreaterThan(0);
           expect(rowsAtControl).toBeLessThan(rowCount);
           expect(projectedRows).toBe(rowCount);

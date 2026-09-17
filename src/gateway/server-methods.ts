@@ -69,7 +69,6 @@ import type {
 import type { GatewayRequestEntry } from "./server-request-entry.js";
 import type { GatewayRpcDiagnostics } from "./server/ws-connection/request-diagnostics.js";
 import { sessionMutationTargetFields } from "./session-method-policy.js";
-import { getSessionRowProjection } from "./session-row-projection-access.js";
 import { resolveDirectIncognitoTargets } from "./session-sharing-target-input.js";
 import {
   resolveSessionMutationAuthorization,
@@ -324,12 +323,6 @@ export async function authorizeGatewayRequestPreDispatch(params: {
           },
         ),
       };
-    }
-    const projection =
-      params.method === "sessions.describe" ? getSessionRowProjection(params.context) : undefined;
-    if (projection?.needsMaterialization) {
-      await projection.ensureMaterialized();
-      continue;
     }
     const preparedSessionMutation = withCanonicalSessionValidationDeferral(() =>
       resolveSessionMutationAuthorization({

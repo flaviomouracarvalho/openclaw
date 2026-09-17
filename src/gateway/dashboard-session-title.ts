@@ -44,6 +44,14 @@ const DASHBOARD_SESSION_TITLE_PROMPT =
 // pin an entry here and block future attempts.
 const sessionTitleRequests = new Map<string, Promise<boolean>>();
 
+export function hasPendingSessionTitle(params: {
+  storePath: string;
+  sessionKey: string;
+  sessionId: string;
+}): boolean {
+  return sessionTitleRequests.has(`${params.storePath}\0${params.sessionKey}\0${params.sessionId}`);
+}
+
 function decodeTextAttachmentPrefix(attachment: ChatAttachment, maxChars: number): string | null {
   const mimeType = attachment.mimeType?.trim().toLowerCase();
   const content = attachment.content;
