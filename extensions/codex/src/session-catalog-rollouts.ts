@@ -4,7 +4,7 @@ import { constants, createZstdDecompress } from "node:zlib";
 import { extractErrorCode } from "openclaw/plugin-sdk/error-runtime";
 import { root as openSafeRoot } from "openclaw/plugin-sdk/file-access-runtime";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { sanitizeTerminalText } from "openclaw/plugin-sdk/text-chunking";
+import type { sanitizeTerminalText } from "openclaw/plugin-sdk/text-chunking";
 import type { CodexSessionSource, CodexThread } from "./app-server/protocol.js";
 import {
   CODEX_CATALOG_MAX_ROWS,
@@ -218,7 +218,10 @@ function sourceFromMetadata(value: unknown): CodexSessionSource {
   return "unknown";
 }
 
-function previewFromEvent(payload: Record<string, unknown>): string | undefined {
+function previewFromEvent(
+  payload: Record<string, unknown>,
+  sanitize: typeof sanitizeTerminalText,
+): string | undefined {
   let message: string | undefined;
   let image = false;
   let audio = false;
@@ -248,10 +251,8 @@ function previewFromEvent(payload: Record<string, unknown>): string | undefined 
     message = message.slice(message.indexOf(prefix) + prefix.length);
   }
   return (
-    truncateCodexCatalogPreview(
-      selectCodexCatalogPreviewInput(message ?? ""),
-      sanitizeTerminalText,
-    ) || (image ? "[Image]" : audio ? "[Audio]" : undefined)
+    truncateCodexCatalogPreview(selectCodexCatalogPreviewInput(message ?? ""), sanitize) ||
+    (image ? "[Image]" : audio ? "[Audio]" : undefined)
   );
 }
 
@@ -352,9 +353,10 @@ export async function readCodexCatalogRollout(
     };
     // Response items include injected model context. Only native user events
     // represent a first-user preview; a missed prefix keeps the native value.
+    const { sanitizeTerminalText } = await import("openclaw/plugin-sdk/text-chunking");
     for (const record of first) {
       if (record.type === "event_msg" && isRecord(record.payload)) {
-        const preview = previewFromEvent(record.payload);
+        const preview = previewFromEvent(record.payload, sanitizeTerminalText);
         if (preview) {
           thread.preview = preview;
           break;

@@ -2,7 +2,6 @@ import { watch, type FSWatcher } from "node:fs";
 import { setImmediate as nextTurn } from "node:timers/promises";
 import { isDeepStrictEqual } from "node:util";
 import { embeddedAgentLog } from "openclaw/plugin-sdk/agent-harness-registration";
-import { sanitizeTerminalText } from "openclaw/plugin-sdk/text-chunking";
 import type { CodexThreadListParams, CodexThread } from "./app-server/protocol.js";
 import { subscribeCodexCatalogEvents } from "./session-catalog-events.js";
 import { CodexCatalogIndexEvents } from "./session-catalog-index-events.js";
@@ -553,6 +552,7 @@ export class CodexCatalogIndex {
         observed.set(file, fingerprint);
         continue;
       }
+      const { sanitizeTerminalText } = await import("openclaw/plugin-sdk/text-chunking");
       const projected = await projectCodexCatalogPage(
         { data: [thread] },
         { localSessionsRoot: root, sanitize: sanitizeTerminalText },
@@ -636,6 +636,7 @@ export class CodexCatalogIndex {
     fieldRevision: FieldRevision,
   ): Promise<void> {
     // Notifications and mutation results still belong to their native consumers.
+    const { sanitizeTerminalText } = await import("openclaw/plugin-sdk/text-chunking");
     const projected = await projectCodexCatalogPage(
       { data: [{ ...thread }] },
       {
