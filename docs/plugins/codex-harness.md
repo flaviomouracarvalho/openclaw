@@ -18,9 +18,13 @@ The native session catalog keeps one resident index per Codex home, shared acros
 agents, working-directory filters, searches, and pages. Lists filter and page
 bounded display rows in memory. They do not expire or restart native discovery
 on the normal sidebar polling interval. Previews remain limited to 500 characters;
-native hydration and catalog pages remain limited to 64 rows each. Native preview
-fields can still be large during hydration; only their bounded display copies
-remain resident. Recency, native position within exposed timestamp ties, and thread ID form the
+native hydration and catalog pages remain limited to 64 rows each. Native `thread/list` has no bounded metadata projection, so wire JSON can still be
+large. Immediately after decoding, catalog responses discard unused native fields
+and detach bounded metadata before the response promise settles. Each native page
+contains at most 64 rows (less than 6 MiB of serialized catalog metadata even at
+all field limits). Unchanged background rows reuse resident previews at this
+boundary without sanitizing them again; new or changed rows retain the prefix-first
+preview selector. Native wire parsing remains a transient allocation cost. Recency, native position within exposed timestamp ties, and thread ID form the
 stable ordering and opaque continuation key. Initial native positions preserve
 the sub-second order that the protocol rounds to seconds. Unchanged rows keep
 their positions across background refreshes, so existing cursors do not repeat

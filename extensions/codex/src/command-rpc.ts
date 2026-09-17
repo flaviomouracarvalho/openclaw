@@ -42,6 +42,7 @@ import {
 } from "./app-server/request.js";
 import { createCodexSessionGenerationSupersededError } from "./app-server/session-binding.js";
 import { resumeCodexAppServerThread } from "./app-server/thread-resume.js";
+import type { CodexCatalogPreviewCache } from "./session-catalog-native-projection.js";
 
 export type SafeValue<T> = { ok: true; value: T } | { ok: false; error: string };
 
@@ -62,6 +63,7 @@ export type CodexControlRequestOptions = {
   timeoutMs?: number;
   assertCurrent?: () => void;
   catalogPreview?: true;
+  catalogPreviewCache?: CodexCatalogPreviewCache;
   controlObservation?: CodexControlRequestObservation;
   beforeRequest?: (
     request: CodexAppServerScopedRequest,
@@ -251,7 +253,7 @@ export async function codexControlRequest(
     agentDir: options.agentDir,
     isolated: options.isolated,
     ...(options.catalogPreview && method === "thread/list"
-      ? { catalogPreview: true as const }
+      ? { catalogPreview: true as const, catalogPreviewCache: options.catalogPreviewCache }
       : {}),
     ...(options.controlObservation ? { controlObservation: options.controlObservation } : {}),
     ...auth.clientOptions,

@@ -21,6 +21,7 @@ import {
   type CodexCatalogRolloutFingerprint,
   CodexCatalogPersistence,
 } from "./session-catalog-index-state.js";
+import { CODEX_CATALOG_NATIVE_PAGE_LIMIT } from "./session-catalog-native-projection.js";
 import { readControlCursor } from "./session-catalog-parsing.js";
 import { projectCodexCatalogPage } from "./session-catalog-projection.js";
 import {
@@ -34,7 +35,6 @@ import type {
   CodexSessionCatalogPageParams,
 } from "./session-catalog-types.js";
 
-const NATIVE_PAGE_LIMIT = 64;
 const RECONCILE_MS = 30_000;
 type CodexCatalogIndexRead = (
   params: CodexThreadListParams,
@@ -387,7 +387,7 @@ export class CodexCatalogIndex {
           modelProviders: [],
           sortKey: "recency_at",
           sortDirection: "desc",
-          limit: NATIVE_PAGE_LIMIT,
+          limit: CODEX_CATALOG_NATIVE_PAGE_LIMIT,
           ...(useStateDbOnly ? { useStateDbOnly } : {}),
           ...(cursor ? { cursor } : {}),
         },

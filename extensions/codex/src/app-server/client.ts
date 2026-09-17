@@ -11,6 +11,7 @@ import { addSafeTimeoutDelayGraceMs } from "openclaw/plugin-sdk/number-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { sliceUtf16Safe, truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { parse as parseSemver } from "semver";
+import type { CodexCatalogPreviewCache } from "../session-catalog-native-projection.js";
 import { dispatchCodexAppServerResponse } from "./client-response.js";
 import type { CodexAppServerStartOptions } from "./config-contracts.js";
 import { resolveCodexAppServerRuntimeOptions } from "./config-runtime.js";
@@ -61,6 +62,7 @@ type RequestOptions = {
   signal?: AbortSignal;
   assertCurrent?: () => void;
   catalogPreview?: true;
+  catalogPreviewCache?: CodexCatalogPreviewCache;
   attemptWaiterFinished?: CodexRequestWaiterFinished;
 };
 
@@ -218,7 +220,10 @@ export class CodexAppServerClient {
   private readonly child: CodexAppServerTransport;
   private readonly lines: ReadlineInterface;
   private readonly pending = new Map<number | string, CodexRequestAttempt>();
-  private readonly catalogResponses = new WeakSet<CodexRequestAttempt>();
+  private readonly catalogResponses = new WeakMap<
+    CodexRequestAttempt,
+    true | CodexCatalogPreviewCache
+  >();
   private readonly requestHandlers = new Set<CodexServerRequestHandler>();
   private readonly notificationHandlers = new Set<CodexServerNotificationHandler>();
   private readonly pendingStartupWarnings: CodexServerNotification[] = [];
@@ -714,7 +719,7 @@ export class CodexAppServerClient {
     });
     this.pending.set(id, attempt);
     if (options.catalogPreview && method === "thread/list") {
-      this.catalogResponses.add(attempt);
+      this.catalogResponses.set(attempt, options.catalogPreviewCache ?? true);
     }
     // Stateful ownership assertions remain pre-write checks.
     const result = attempt.wait<T>(

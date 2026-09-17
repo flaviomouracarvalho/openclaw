@@ -38,7 +38,7 @@ it("reconciles remote membership without reparsing unchanged visible or hidden p
     async (_plugin, method, params, options) => {
       expect(method).toBe("thread/list");
       if (params.useStateDbOnly) {
-        expect(options).not.toHaveProperty("catalogPreview");
+        expect(options).toHaveProperty("catalogPreview", true);
       }
       return { data: native } satisfies CodexThreadListResponse;
     },

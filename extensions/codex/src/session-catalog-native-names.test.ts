@@ -42,7 +42,16 @@ it("reconciles saved and externally changed names through background DB-only pag
     async (_plugin, method, params, options) => {
       expect(method).toBe("thread/list");
       expect(params.useStateDbOnly).toBe(true);
-      expect(options).not.toHaveProperty("catalogPreview");
+      expect(options).toHaveProperty("catalogPreview", true);
+      const thread = native[params.cursor ? 1 : 0]!;
+      expect(
+        options.catalogPreviewCache?.({
+          id: thread.id,
+          path: thread.path,
+          updatedAt: thread.updatedAt,
+          recencyAt: thread.recencyAt,
+        }),
+      ).toBe(original[params.cursor ? 1 : 0]!.preview);
       return {
         data: [native[params.cursor ? 1 : 0]!],
         nextCursor: params.cursor ? null : "native-names-tail",

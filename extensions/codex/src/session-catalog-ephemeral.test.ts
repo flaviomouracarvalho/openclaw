@@ -13,6 +13,7 @@ import {
   threadStartResult,
 } from "./app-server/bounded-turn.test-harness.js";
 import { resolveCodexAppServerRuntimeOptions } from "./app-server/config.js";
+import type { CodexThread } from "./app-server/protocol.js";
 import * as sharedClient from "./app-server/shared-client.js";
 import { createClientHarness } from "./app-server/test-support.js";
 import {
@@ -34,14 +35,17 @@ it.each([false, true])(
     const pluginConfig = {};
     const { start } = resolveCodexAppServerRuntimeOptions({ pluginConfig });
     const homeId = await codexCatalogResidentHomeKey({ startOptions: start, agentDir });
-    const native = threadStartResult("gpt-5.4");
-    Object.assign(native.thread, {
+    const started = threadStartResult("gpt-5.4");
+    const thread: CodexThread = {
+      ...started.thread,
+      status: { type: "idle" },
       path: null,
       recencyAt: 100,
       preview: "Name this conversation.",
       source: "cli",
       originator: "codex_cli_rs",
-    });
+    };
+    const native = { ...started, thread };
     const openState = () =>
       createPluginStateKeyedStoreForTests<StoredCodexCatalogEntry>("codex", {
         namespace: `ephemeral-${existing}`,
@@ -89,8 +93,9 @@ it.each([false, true])(
     });
     vi.spyOn(sharedClient, "createIsolatedCodexAppServerClient").mockImplementation(
       async (options) => {
+        if (!options?.startOptions) throw new Error("Expected bounded-turn start options");
         await observeCodexCatalogClient(harness.client, {
-          startOptions: options.startOptions!,
+          startOptions: options.startOptions,
           agentDir: options.agentDir,
         });
         return harness.client;

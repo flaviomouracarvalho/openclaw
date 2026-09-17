@@ -58,6 +58,72 @@ describe("Codex catalog preview decoding", () => {
     expect((await ordinary).data[0]?.preview).toBe(preview);
   });
 
+  it("reuses unchanged resident previews before sanitizing native responses", async () => {
+    const harness = createHarness();
+    const sanitize = vi.spyOn(terminalText, "sanitizeTerminalText");
+    const catalogPreviewCache = (thread: { updatedAt?: number | null }) =>
+      thread.updatedAt === 100 ? "Retained first user request" : undefined;
+    for (const updatedAt of [100, 101]) {
+      const request = harness.client.request<{ data: Array<{ preview: string }> }>(
+        "thread/list",
+        { limit: 64, useStateDbOnly: true },
+        { catalogPreview: true, catalogPreviewCache },
+      );
+      harness.send({
+        id: requestId(harness, updatedAt - 100),
+        result: {
+          data: [
+            {
+              id: "cached-preview",
+              updatedAt,
+              preview: "new ".repeat(100_000),
+            },
+          ],
+        },
+      });
+      const page = await request;
+      if (updatedAt === 100) {
+        expect(page.data[0]?.preview).toBe("Retained first user request");
+        expect(sanitize).not.toHaveBeenCalled();
+      } else {
+        expect(page.data[0]?.preview).toBe("new ".repeat(125));
+        expect(sanitize).toHaveBeenCalled();
+      }
+    }
+  });
+
+  it("discards unused native payloads before retaining a catalog response", async () => {
+    const harness = createHarness();
+    const large = "unused native history ".repeat(100_000);
+    const thread = {
+      id: "bounded-metadata",
+      preview: "Please review the sidebar and check its session ordering.",
+      cwd: "/workspace/project",
+      name: "Sidebar review",
+      gitInfo: { branch: "catalog-fix", sha: large, originUrl: large },
+      extra: { payload: large },
+      turns: [{ items: [{ text: large }] }],
+    };
+    const catalog = harness.client.request<{ data: Array<typeof thread> }>(
+      "thread/list",
+      { limit: 64, useStateDbOnly: true },
+      { timeoutMs: 1_000, catalogPreview: true },
+    );
+    harness.send({ id: requestId(harness), result: { data: [thread] } });
+    const page = await catalog;
+    expect(page.data[0]).toMatchObject({
+      id: thread.id,
+      preview: thread.preview,
+      cwd: thread.cwd,
+      name: thread.name,
+      gitInfo: { branch: "catalog-fix" },
+    });
+    expect(Buffer.byteLength(JSON.stringify(page))).toBeLessThan(2_048);
+    const ordinary = harness.client.request("thread/list", { limit: 64, useStateDbOnly: true });
+    harness.send({ id: requestId(harness, 1), result: { data: [thread] } });
+    await expect(ordinary).resolves.toEqual({ data: [thread] });
+  });
+
   it.each([
     {
       name: "leading whitespace beyond the input prefix",

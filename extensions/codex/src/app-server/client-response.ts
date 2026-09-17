@@ -1,8 +1,8 @@
 import { sanitizeTerminalText } from "openclaw/plugin-sdk/text-chunking";
 import {
-  selectCodexCatalogPreviewInput,
-  truncateCodexCatalogPreview,
-} from "../session-catalog-parsing.js";
+  projectCodexCatalogNativeResponse,
+  type CodexCatalogPreviewCache,
+} from "../session-catalog-native-projection.js";
 import { isJsonObject, type RpcResponse } from "./protocol.js";
 import type { CodexRequestAttempt } from "./request-attempt.js";
 import { CODEX_APP_SERVER_OVERLOADED_ERROR_CODE, CodexAppServerRpcError } from "./rpc-error.js";
@@ -11,7 +11,7 @@ import { CODEX_APP_SERVER_OVERLOADED_ERROR_CODE, CodexAppServerRpcError } from "
 export function dispatchCodexAppServerResponse(
   response: RpcResponse,
   attempts: Map<number | string, CodexRequestAttempt>,
-  catalogResponses: WeakSet<CodexRequestAttempt>,
+  catalogResponses: WeakMap<CodexRequestAttempt, true | CodexCatalogPreviewCache>,
 ): boolean {
   const pending = attempts.get(response.id);
   if (!pending) {
@@ -33,13 +33,21 @@ export function dispatchCodexAppServerResponse(
     isJsonObject(response.result) &&
     Array.isArray(response.result.data)
   ) {
-    for (const thread of response.result.data) {
-      if (isJsonObject(thread) && typeof thread.preview === "string") {
-        thread.preview = truncateCodexCatalogPreview(
-          selectCodexCatalogPreviewInput(thread.preview),
-          sanitizeTerminalText,
-        );
-      }
+    const preview = catalogResponses.get(pending);
+    try {
+      response.result = projectCodexCatalogNativeResponse(
+        response.result,
+        sanitizeTerminalText,
+        typeof preview === "function" ? preview : undefined,
+      );
+    } catch (error) {
+      pending.reject(
+        error instanceof Error
+          ? error
+          : new Error("Codex catalog projection failed", { cause: error }),
+        false,
+      );
+      return false;
     }
   }
   pending.resolve(response.result);

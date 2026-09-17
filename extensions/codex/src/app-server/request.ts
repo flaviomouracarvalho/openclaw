@@ -1,3 +1,4 @@
+import type { CodexCatalogPreviewCache } from "../session-catalog-native-projection.js";
 /**
  * Sends typed JSON-RPC requests to the Codex app-server with sandbox guard
  * checks, shared-client leasing, and isolated-client shutdown handling.
@@ -131,6 +132,7 @@ type CodexAppServerJsonClientOptions = Pick<
   isolated?: boolean;
   assertCurrent?: () => void;
   catalogPreview?: true;
+  catalogPreviewCache?: CodexCatalogPreviewCache;
   controlObservation?: CodexControlRequestObservation;
 };
 
@@ -403,7 +405,10 @@ export async function withCodexAppServerJsonClient<T>(
                 signal: timeoutController.signal,
                 ...(attemptWaiterFinished ? { attemptWaiterFinished } : {}),
                 ...(params.catalogPreview && method === "thread/list"
-                  ? { catalogPreview: true as const }
+                  ? {
+                      catalogPreview: true as const,
+                      catalogPreviewCache: params.catalogPreviewCache,
+                    }
                   : {}),
                 assertCurrent: () => {
                   assertCurrent();

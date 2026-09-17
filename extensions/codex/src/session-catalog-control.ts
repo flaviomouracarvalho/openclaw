@@ -34,6 +34,7 @@ import { codexCatalogResidentHomeKey } from "./session-catalog-events.js";
 import { createCodexCatalogHomeResolver, type CodexCatalogHome } from "./session-catalog-homes.js";
 import type { CodexCatalogState } from "./session-catalog-index-state.js";
 import { CodexCatalogIndex } from "./session-catalog-index.js";
+import type { CodexCatalogPreviewCache } from "./session-catalog-native-projection.js";
 import {
   CatalogParamsError,
   isInteractiveThreadSource,
@@ -41,6 +42,7 @@ import {
   readPageParams,
 } from "./session-catalog-parsing.js";
 import {
+  canReuseCodexCatalogPreview,
   projectCodexCatalogDeltaPage,
   projectCodexCatalogPage,
 } from "./session-catalog-projection.js";
@@ -356,9 +358,18 @@ export function createCodexSessionCatalogControl(params: {
           response: CodexThreadListResponse,
           diagnostics: CodexCatalogPageDiagnostics | undefined,
         ) => T | Promise<T>,
-        catalogPreview: boolean,
       ): Promise<T> => {
-        const requests = createRequestSnapshot(agentId, source, catalogPreview ? true : undefined);
+        const requests = createRequestSnapshot(
+          agentId,
+          source,
+          true,
+          query.useStateDbOnly
+            ? (thread) => {
+                const row = index?.get(thread.id);
+                return canReuseCodexCatalogPreview(row, thread) ? row?.preview : undefined;
+              }
+            : undefined,
+        );
         if (!query.cursor || !nativeAttempt) {
           nativeAttempt = requests.beginList();
         }
@@ -413,25 +424,21 @@ export function createCodexSessionCatalogControl(params: {
           }
         },
         readNative: (query, remainingRows) =>
-          readNativePage(
-            query,
-            async (response, diagnostics) => {
-              const { sanitizeTerminalText } = await import("openclaw/plugin-sdk/text-chunking");
-              const bounded = { ...response, data: response.data.slice(0, remainingRows) };
-              const projection = {
-                localSessionsRoot: root,
-                sanitize: sanitizeTerminalText,
-                diagnostics,
-              };
-              return query.useStateDbOnly
-                ? await projectCodexCatalogDeltaPage(bounded, {
-                    ...projection,
-                    getRow: (threadId) => index?.get(threadId),
-                  })
-                : await projectCodexCatalogPage(bounded, projection);
-            },
-            !query.useStateDbOnly,
-          ),
+          readNativePage(query, async (response, diagnostics) => {
+            const { sanitizeTerminalText } = await import("openclaw/plugin-sdk/text-chunking");
+            const bounded = { ...response, data: response.data.slice(0, remainingRows) };
+            const projection = {
+              localSessionsRoot: root,
+              sanitize: sanitizeTerminalText,
+              diagnostics,
+            };
+            return query.useStateDbOnly
+              ? await projectCodexCatalogDeltaPage(bounded, {
+                  ...projection,
+                  getRow: (threadId) => index?.get(threadId),
+                })
+              : await projectCodexCatalogPage(bounded, projection);
+          }),
       });
       indexes.set(homeId, index);
     }
@@ -478,6 +485,7 @@ export function createCodexSessionCatalogControl(params: {
     agentId: string | undefined,
     source?: CodexCatalogControlSource,
     catalogPreview?: true,
+    catalogPreviewCache?: CodexCatalogPreviewCache,
   ): CodexSessionCatalogRequestSnapshot => {
     const pluginConfig = getPluginConfig();
     const runtime = source?.appServer ?? params.resolveRuntimeOptions({ pluginConfig });
@@ -491,7 +499,7 @@ export function createCodexSessionCatalogControl(params: {
           authProfileId: null,
           assertCurrent,
           ...(catalogPreview && method === CODEX_CONTROL_METHODS.listThreads
-            ? { catalogPreview }
+            ? { catalogPreview, ...(catalogPreviewCache ? { catalogPreviewCache } : {}) }
             : {}),
           ...(observation ? { controlObservation: observation } : {}),
           ...(timeoutMs === undefined ? {} : { timeoutMs }),

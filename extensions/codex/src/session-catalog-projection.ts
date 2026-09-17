@@ -1,6 +1,6 @@
 import { asFiniteNumber } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { sanitizeTerminalText } from "openclaw/plugin-sdk/text-chunking";
-import type { CodexThreadListResponse } from "./app-server/protocol.js";
+import type { CodexThread, CodexThreadListResponse } from "./app-server/protocol.js";
 import type { CodexCatalogPageDiagnostics } from "./session-catalog-diagnostics.js";
 import { applyCodexCatalogName } from "./session-catalog-index-names.js";
 import type { CodexCatalogIndexRow } from "./session-catalog-index-state.js";
@@ -88,6 +88,21 @@ export async function projectCodexCatalogPage(
   }
 }
 
+/** Native activity/path changes invalidate the retained first-user preview. */
+export function canReuseCodexCatalogPreview(
+  row: CodexCatalogIndexRow | undefined,
+  thread: Pick<CodexThread, "id" | "path" | "updatedAt" | "recencyAt">,
+): boolean {
+  return Boolean(
+    row &&
+    !row.archived &&
+    row.updatedAt === (asFiniteNumber(thread.updatedAt) ?? null) &&
+    row.recencyAt === (asFiniteNumber(thread.recencyAt) ?? null) &&
+    (row.rolloutPath ? codexCatalogRolloutLogicalPath(row.rolloutPath) : undefined) ===
+      (thread.path ? codexCatalogRolloutLogicalPath(thread.path) : undefined),
+  );
+}
+
 export async function projectCodexCatalogDeltaPage(
   response: CodexThreadListResponse,
   params: CodexCatalogProjectionParams & {
@@ -99,11 +114,7 @@ export async function projectCodexCatalogDeltaPage(
     if (
       thread.ephemeral === true ||
       !row ||
-      row.archived ||
-      row.updatedAt !== (asFiniteNumber(thread.updatedAt) ?? null) ||
-      row.recencyAt !== (asFiniteNumber(thread.recencyAt) ?? null) ||
-      (row.rolloutPath ? codexCatalogRolloutLogicalPath(row.rolloutPath) : undefined) !==
-        (thread.path ? codexCatalogRolloutLogicalPath(thread.path) : undefined) ||
+      !canReuseCodexCatalogPreview(row, thread) ||
       (row.page.sessions.length > 0 &&
         row.page.sessions[0]?.cwd !== boundedCatalogString(thread.cwd, MAX_CWD_LENGTH))
     ) {
