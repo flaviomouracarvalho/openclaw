@@ -126,15 +126,16 @@ it.each([
           boundaryEntered.resolve();
           await releaseBoundary.promise;
         }
-        return [{ id: "channel:100000000000000001", name: "alerts" }];
+        return [{ kind: "group" as const, id: "channel:100000000000000001", name: "alerts" }];
       };
       const plugin: ChannelPlugin = {
         ...createChannelTestPluginBase({ id: "discord" }),
         actions: {
           describeMessageTool: () => ({ actions: ["send", "set-presence"] }),
+          supportsAction: ({ action: requestedAction }) => requestedAction === "set-presence",
           handleAction: async ({ action: requestedAction }) => {
             if (requestedAction !== "set-presence") {
-              return null;
+              throw new Error(`Unexpected plugin action: ${requestedAction}`);
             }
             mutations.push(requestedAction);
             if (revokeAt === "action") {
