@@ -31,6 +31,7 @@ export async function projectCodexCatalogPage(
   const { diagnostics, sanitize } = params;
   const responseStarted = performance.now();
   const rows: CodexCatalogIndexRow[] = [];
+  const excludedThreadIds: string[] = [];
   try {
     readControlCursor(response.backwardsCursor, "backwards response");
     // Also bound direct/pinned adapters before the first asynchronous provenance read.
@@ -43,6 +44,10 @@ export async function projectCodexCatalogPage(
       }
     }
     for (const thread of response.data) {
+      if (thread.ephemeral === true) {
+        excludedThreadIds.push(thread.id);
+        continue;
+      }
       const page: CodexSessionCatalogPage = { sessions: [] };
       if (
         await isOpenClawManagedCodexThread(
@@ -71,6 +76,7 @@ export async function projectCodexCatalogPage(
     }
     return {
       rows,
+      ...(excludedThreadIds.length ? { excludedThreadIds } : {}),
       nextCursor: readControlCursor(response.nextCursor, "next response"),
       backwardsCursor: readControlCursor(response.backwardsCursor, "backwards response"),
     };
@@ -91,6 +97,7 @@ export async function projectCodexCatalogDeltaPage(
   const reusable = response.data.map((thread) => {
     const row = params.getRow(thread.id);
     if (
+      thread.ephemeral === true ||
       !row ||
       row.archived ||
       row.updatedAt !== (asFiniteNumber(thread.updatedAt) ?? null) ||
@@ -124,6 +131,8 @@ export async function projectCodexCatalogDeltaPage(
   let changedIndex = 0;
   return {
     ...changed,
-    rows: reusable.map((row) => row ?? changed.rows[changedIndex++]!),
+    rows: reusable.flatMap((row, index) =>
+      response.data[index]?.ephemeral === true ? [] : [row ?? changed.rows[changedIndex++]!],
+    ),
   };
 }

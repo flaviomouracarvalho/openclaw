@@ -455,6 +455,7 @@ export type CodexTurn = {
 
 export type CodexThread = {
   id: string;
+  ephemeral?: boolean;
   forkedFromId?: string | null;
   parentThreadId?: string | null;
   sessionId?: string;

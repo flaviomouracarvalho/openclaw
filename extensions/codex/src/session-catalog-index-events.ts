@@ -42,7 +42,7 @@ export class CodexCatalogIndexEvents {
       }
       // SAFETY: native v2 ThreadStartedNotification carries Thread, as thread/list does.
       const thread = params.thread as CodexThread;
-      if (!thread.preview?.trim() && thread.recencyAt == null) {
+      if (!thread.ephemeral && !thread.preview?.trim() && thread.recencyAt == null) {
         return;
       }
       if (!this.hasCapacity()) {

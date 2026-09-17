@@ -45,6 +45,7 @@ type CodexCatalogIndexRead = (
   remainingRows: number,
 ) => Promise<{
   rows: CodexCatalogIndexRow[];
+  excludedThreadIds?: string[];
   nextCursor?: string;
 }>;
 type FieldRevision = { status: number; name: number };
@@ -418,6 +419,11 @@ export class CodexCatalogIndex {
         observedRevision = this.sourceRevision;
         firstPage = false;
       }
+      for (const id of page.excludedThreadIds ?? []) {
+        if (isCurrent(id)) {
+          this.remove(id);
+        }
+      }
       for (const row of page.rows) {
         const position = sourceOrder++;
         if (position >= CODEX_CATALOG_MAX_ROWS) {
@@ -646,6 +652,9 @@ export class CodexCatalogIndex {
     );
     if (this.closed) {
       return;
+    }
+    if (projected.excludedThreadIds?.includes(thread.id) && isCurrent(thread.id)) {
+      this.remove(thread.id);
     }
     const row = projected.rows[0];
     if (row) {
