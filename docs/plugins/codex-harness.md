@@ -36,6 +36,10 @@ of an existing timestamp tie, preserving native order within each discovery batc
 An observed turn start also receives a fresh position when its recency falls in
 the same exposed timestamp second as earlier activity.
 
+Search and managed-session exclusion filling examine at most 20 resident pages
+per request. If that limit is reached, the result retains an opaque continuation
+cursor so the next request can find later visible matches without native reads.
+
 Explicit homes hydrate in the background when the plugin activates. An implicit
 process home waits for an authorized catalog request. A home without a valid,
 complete saved snapshot walks native `thread/list` pages once, yielding between
