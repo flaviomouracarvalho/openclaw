@@ -9,9 +9,9 @@ import {
 import { SessionTranscriptColdError } from "../config/sessions/session-cold-storage-state.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import { hasInterSessionUserProvenance } from "../sessions/input-provenance.js";
-import { hasExplicitSessionName, hasPendingSessionTitle } from "./dashboard-session-title.js";
 import { deriveGoalSessionTitle } from "./derive-goal-session-title.js";
 import { projectSessionDisplayMessage } from "./session-display-projection.js";
+import { hasExplicitSessionName, sessionTitleRequests } from "./session-title-state.js";
 import { sqliteMessageEventWithSeq } from "./session-transcript-entry-message.js";
 
 /** The projection caller schedules one legacy title per background work turn. */
@@ -25,7 +25,7 @@ export async function backfillSessionTitle(params: {
   lifecycleRevision?: string;
   shouldCommit?: () => boolean;
 }): Promise<boolean> {
-  const mayWrite = () => params.shouldCommit?.() !== false && !hasPendingSessionTitle(params);
+  const mayWrite = () => params.shouldCommit?.() !== false && !sessionTitleRequests.get(params);
   if (!mayWrite()) {
     return false;
   }
